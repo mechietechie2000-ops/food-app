@@ -1,9 +1,8 @@
 // src/context/AuthContext.jsx
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { api, setUnauthorizedHandler } from '../services/api';
-
-const AuthContext = createContext(null);
+import { AuthContext } from './auth-context';
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
@@ -24,7 +23,7 @@ export const AuthProvider = ({ children }) => {
         // that validates the cookie and returns the logged-in user profile
         const data = await api('/auth/me', { method: 'GET' });
         setUser(data.user);
-      } catch (err) {
+      } catch {
         setUser(null);
       } finally {
         setLoading(false);
@@ -44,13 +43,11 @@ export const AuthProvider = ({ children }) => {
     return data;
   };
 
-  const register = async (name, email, password) => {
-    const data = await api('/auth/register', {
+  const register = (firstName, lastName, email, password) => {
+    return api('/auth/register', {
       method: 'POST',
-      body: { name, email, password },
+      body: { firstName, lastName, email, password },
     });
-    setUser(data.user);
-    return data;
   };
 
   const logout = async () => {
@@ -71,12 +68,4 @@ export const AuthProvider = ({ children }) => {
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
-};
-
-export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
-  return context;
 };

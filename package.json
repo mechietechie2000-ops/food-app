@@ -5,9 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:all": "node scripts/start-app.js dev",
+    "app": "node scripts/start-app.js preview",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "server": "npm run dev --prefix backend",
+    "server:start": "npm start --prefix backend"
   },
   "dependencies": {
     "react": "^19.2.8",

@@ -1,6 +1,6 @@
 // src/components/Register.jsx
 
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { 
   Box, 
   Button, 
@@ -12,7 +12,7 @@ import {
   Grid
 } from '@mui/material';
 
-import { useAuth } from '../context/useAuth';
+import { useAuth } from '../context/AuthContext';
 import { tokens } from '../theme'; // Import your custom color tokens
 
 export const Register = ({ onSwitchToLogin, onSuccess }) => {
@@ -33,7 +33,15 @@ export const Register = ({ onSwitchToLogin, onSuccess }) => {
     setIsSubmitting(true);
 
     try {
-      await register(firstName, lastName, email, password);
+      const response = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ firstName, lastName, email, password }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Registration failed');
+
       if (onSuccess) onSuccess();
     } catch (err) {
       setError(err.message);
@@ -45,14 +53,12 @@ export const Register = ({ onSwitchToLogin, onSuccess }) => {
   return (
     // Full screen wrapper using your application's primary background color
     <Box
-      sx={{
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        minHeight: '100vh',
-        width: '100%',
-        backgroundColor: colors.primary[500],
-      }}
+      display="flex"
+      justifyContent="center"
+      alignItems="center"
+      minHeight="100vh"
+      width="100vw"
+      backgroundColor={colors.primary[500]}
     >
       <Paper
         elevation={6}
@@ -86,7 +92,7 @@ export const Register = ({ onSwitchToLogin, onSuccess }) => {
 
         <Box component="form" onSubmit={handleSubmit} noValidate sx={{ width: '100%' }}>
           <Grid container spacing={2}>
-            <Grid size={{ xs: 12, sm: 6 }}>
+            <Grid item xs={12} sm={6}>
               <TextField
                 margin="normal"
                 required
@@ -105,7 +111,7 @@ export const Register = ({ onSwitchToLogin, onSuccess }) => {
                 }}                
               />
             </Grid>
-            <Grid size={{ xs: 12, sm: 6 }}>
+            <Grid item xs={12} sm={6}>
               <TextField
                 margin="normal"
                 required

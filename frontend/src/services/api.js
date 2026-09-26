@@ -1,11 +1,6 @@
 // src/services/api.js
 
-//const API_BASE_URL = 'http://localhost:5001/api';
-// const API_BASE_URL = process.env.REACT_APP_API_URL || '/api';
-const API_BASE_URL =
-  window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-    ? (process.env.REACT_APP_API_URL || 'http://localhost:5001/api')
-    : '/api';
+const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
 console.log("API BASE URL", API_BASE_URL)
 
@@ -31,34 +26,35 @@ export const api = async (endpoint, options = {}) => {
     config.body = JSON.stringify(options.body);
   }
 
-  try {
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, config);
+  const response = await fetch(`${API_BASE_URL}${endpoint}`, config);
 
-    // Handle session expiration or missing auth cookies globally
-    if (response.status === 401) {
-      if (onUnauthorizedCallback) {
-        onUnauthorizedCallback();
-      }
-      const errorData = await response.json().catch(() => ({}));
-      // Backend error handlers send { error: "..." } (see routes/sections.js
-      // and others); some older routes may send { message: "..." } instead.
-      throw new Error(errorData.error || errorData.message || 'Unauthorized');
+  // Handle session expiration or missing auth cookies globally
+  if (response.status === 401) {
+    if (onUnauthorizedCallback) {
+      onUnauthorizedCallback();
     }
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || errorData.message || `HTTP error! status: ${response.status}`);
-    }
-
-    // Return JSON if present, otherwise null
-    const contentType = response.headers.get('content-type');
-    if (contentType && contentType.includes('application/json')) {
-      return await response.json();
-    }
-    return null;
-  } catch (err) {
-    throw err;
+    const errorData = await response.json().catch(() => ({}));
+    // Backend error handlers send { error: "..." }; older routes may use message.
+    const error = new Error(errorData.error || errorData.message || 'Unauthorized');
+    error.code = errorData.code;
+    error.status = response.status;
+    throw error;
   }
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const error = new Error(errorData.error || errorData.message || `HTTP error! status: ${response.status}`);
+    error.code = errorData.code;
+    error.status = response.status;
+    throw error;
+  }
+
+  // Return JSON if present, otherwise null
+  const contentType = response.headers.get('content-type');
+  if (contentType && contentType.includes('application/json')) {
+    return await response.json();
+  }
+  return null;
 };
 
 // Convenience wrappers so callers can do `const { data } = await api.get(...)`

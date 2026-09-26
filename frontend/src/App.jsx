@@ -1,37 +1,28 @@
-import { useState } from 'react';
-import { Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom';
-import { CssBaseline, ThemeProvider, Box, useMediaQuery, useTheme } from '@mui/material';
+import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
+import {
+  CssBaseline,
+  ThemeProvider,
+} from '@mui/material';
 import { ColorModeContext, useMode } from './theme';
-
-import Topbar from './scenes/global/Topbar';
-import Sidebar from './scenes/global/Sidebar';
-import BottomNav, { BOTTOM_NAV_HEIGHT } from './scenes/global/BottomNav';
-import HomeDashboard from './scenes/dashboard';
-import Calendar from './scenes/calendar/calendar';
-import Meal from './scenes/meal/Meal';
-import Recipe from './scenes/recipe/Recipe';
-import LocalLLMChat from './components/LocalLLMChat';
-
-// Auth imports
-import { AuthProvider, useAuth } from './context/AuthContext';
+import { AuthProvider } from './context/auth-provider';
+import { useAuth } from './context/useAuth';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { Login } from './components/Login';
 import { Register } from './components/Register';
+import RecipePlannerPage from './components/RecipePlannerPage';
 
-// Helper components for standalone Login / Register pages
-const LoginPage = () => {
+function LoginPage() {
   const navigate = useNavigate();
   const { isAuthenticated } = useAuth();
 
-  // If user is already logged in, send them to dashboard
   if (isAuthenticated) {
     return <Navigate to="/" replace />;
   }
 
   return <Login onSwitchToRegister={() => navigate('/register')} onSuccess={() => navigate('/')} />;
-};
+}
 
-const RegisterPage = () => {
+function RegisterPage() {
   const navigate = useNavigate();
   const { isAuthenticated } = useAuth();
 
@@ -39,73 +30,12 @@ const RegisterPage = () => {
     return <Navigate to="/" replace />;
   }
 
-  return <Register onSwitchToLogin={() => navigate('/login')} onSuccess={() => navigate('/')} />;
-};
+  return <Register onSwitchToLogin={() => navigate('/login')} onSuccess={() => navigate('/login')} />;
+}
 
-
-const SectionDetailRoute = () => {
-  const { sectionKey } = useParams();
-  return <SectionDetailView sectionKey={sectionKey} />;
-};
-
-// Main layout wrapper for authenticated routes
-const ProtectedAppLayout = () => {
-  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
-  const theme = useTheme();
-  // Same breakpoint Sidebar.jsx uses for its own mobile/drawer behavior,
-  // kept in sync so both switch to "mobile mode" at the same width.
-  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
-  // const isMobile = useMediaQuery("(max-width:768px)");
-
-  return (
-    <Box display="flex" width="100%" height="100vh" overflow="hidden">
-      {/* SIDEBAR DOCKED ON THE LEFT */}
-      <Sidebar
-        isMobileOpen={isMobileSidebarOpen}
-        onMobileClose={() => setIsMobileSidebarOpen(false)}
-      />
-
-      {/* MAIN CONTENT AREA */}
-      <Box
-        component="main"
-        sx={{
-          flexGrow: 1,
-          height: '100%',
-          overflowY: 'auto',
-          display: 'flex',
-          flexDirection: 'column',
-          minWidth: 0, // Prevents content from forcing horizontal scroll
-        }}
-      >
-        <Topbar onMenuClick={() => setIsMobileSidebarOpen(true)} />
-        <Box
-          flex={1}
-          p={2}
-          // Reserve space so the fixed BottomNav never covers content.
-          sx={
-            isMobile
-              ? { pb: `calc(${BOTTOM_NAV_HEIGHT}px + env(safe-area-inset-bottom) + 16px)` }
-              : undefined
-          }
-        >
-          <Routes>
-            <Route path="/" element={<HomeDashboard />} />
-            <Route path="/calendar" element={<Calendar />} />
-            <Route path="/meal" element={<Meal />} />
-            <Route path="/recipe" element={<Recipe />} />
-            <Route path="/local-llm" element={<LocalLLMChat />} />
-
-            {/* Catch-all fallback inside layout */}
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </Box>
-      </Box>
-
-      {/* BOTTOM NAV — mobile-width screens only (browser tab or installed PWA) */}
-      {isMobile && <BottomNav />}
-    </Box>
-  );
-};
+function HomePage() {
+  return <RecipePlannerPage />;
+}
 
 function AppContent() {
   const [theme, colorMode] = useMode();
@@ -115,13 +45,11 @@ function AppContent() {
       <ThemeProvider theme={theme}>
         <CssBaseline />
         <Routes>
-          {/* Public Auth Routes */}
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
-
-          {/* Protected Routes Guard */}
           <Route element={<ProtectedRoute />}>
-            <Route path="/*" element={<ProtectedAppLayout />} />
+            <Route path="/" element={<HomePage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>
       </ThemeProvider>
@@ -129,13 +57,12 @@ function AppContent() {
   );
 }
 
-// Wrap with AuthProvider at the root level
-function App() {
+export default function App() {
   return (
-    <AuthProvider>
-      <AppContent />
-    </AuthProvider>
+    <BrowserRouter>
+      <AuthProvider>
+        <AppContent />
+      </AuthProvider>
+    </BrowserRouter>
   );
 }
-
-export default App;

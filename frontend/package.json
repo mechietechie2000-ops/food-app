@@ -3,8 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "dependencies": {
-    "@mui/icons-material": "^5.18.0",
-    "@mui/material": "^5.18.0",
-    "@mui/x-data-grid": "latest"
+    "@mui/icons-material": "^9.4.0",
+    "@mui/material": "^9.4.0",
+    "@mui/x-data-grid": "^9.14.0",
+    "react-pro-sidebar": "^1.1.0",
+    "react-router-dom": "^7.18.4"
   }
 }

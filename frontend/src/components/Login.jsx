@@ -1,6 +1,6 @@
 // src/components/Login.jsx
 
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { 
   Box, 
   Button, 
@@ -10,7 +10,7 @@ import {
   Alert,
   useTheme
 } from '@mui/material';
-import { useAuth } from '../context/AuthContext';
+import { useAuth } from '../context/useAuth';
 import { tokens } from '../theme'; // Import your custom color tokens
 
 export const Login = ({ onSwitchToRegister, onSuccess }) => {
@@ -41,12 +41,14 @@ export const Login = ({ onSwitchToRegister, onSuccess }) => {
   return (
     // Full screen wrapper using your application's primary background color
     <Box
-      display="flex"
-      justifyContent="center"
-      alignItems="center"
-      minHeight="100vh"
-      width="100vw"
-      backgroundColor={colors.primary[500]}
+      sx={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        minHeight: '100vh',
+        width: '100%',
+        backgroundColor: colors.primary[500],
+      }}
     >
       <Paper
         elevation={6}

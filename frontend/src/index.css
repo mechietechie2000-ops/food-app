@@ -1,0 +1,32 @@
+/* Force flex layout for root app */
+.app {
+  display: flex !important;
+  /* 100% instead of 100vw: 100vw includes the scrollbar's own width on
+     desktop browsers, which is wider than the visible page whenever a
+     scrollbar is present. Opening a Modal (e.g. the "+" add form) removes
+     the page scrollbar, so 100vw suddenly grows by the scrollbar's width
+     and the whole app shifts/overflows — forcing the user to zoom out to
+     see it centered again. 100% avoids that mismatch entirely. */
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Ensure sidebar sits in flow rather than floating on top */
+.pro-sidebar {
+  position: relative !important;
+  height: 100% !important;
+  min-height: 100vh !important;
+  z-index: 10;
+}
+
+/* On mobile screens, allow it to become an overlay drawer */
+@media (max-width: 768px) {
+  .pro-sidebar.md {
+    position: fixed !important;
+    top: 0;
+    left: 0;
+    height: 100vh !important;
+    z-index: 1300 !important;
+  }
+}

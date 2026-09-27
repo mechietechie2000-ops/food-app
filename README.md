@@ -20,6 +20,16 @@ The frontend proxies `/api` requests to the API. User accounts and push
 subscriptions are stored in `backend/data/food-app.sqlite`.
 Stop both services with **Ctrl+C**.
 
+## Food data
+
+On API startup, the final household schema in
+`backend/food_app_schema_final.sql` is applied and the idempotent sample dataset
+in `backend/food-app-sample-data.sql` is loaded into the same SQLite database.
+Fresh vegetable purchases are stored as separate inventory lots; pantry staples
+are always available and are not tracked as inventory. Grocery entry and
+purchase confirmation are manual. Receipt photos are preview-only; receipt
+parsing is not implemented.
+
 ## Test on a phone
 
 For phone/PWA testing, use the bundled app instead of the development server;
@@ -47,8 +57,8 @@ key pair with `backend/node_modules/.bin/web-push generate-vapid-keys`. Put the 
 `VAPID_SUBJECT` mailto address in `.env`, then restart the backend.
 
 Sign in, enable notifications for the current browser/device, then select
-**Send test notification** on the sample recipe page. Each device gets its own
-subscription under the signed-in account.
+**Send test notification** in notification settings on the weekly planner. Each
+device gets its own subscription under the signed-in account.
 
 For phone testing, deploy the frontend and API behind HTTPS on the staging
 origin. On iPhone/iPad (iOS/iPadOS 16.4 or later), open the site in Safari,
@@ -57,3 +67,28 @@ notifications. On Android, use an up-to-date browser and install the PWA before
 testing background delivery. Permission must be requested from a user gesture.
 
 For production, configure a strong `JWT_SECRET` and valid VAPID settings.
+
+
+## Start 
+FOOD_APP_HOST='<hostname>' npm run app
+
+## Start in background?
+
+## Kill / Stop 
+npm run app starts Node child processes for the API and frontend. Killing the npm process can leave those children running, so ps | grep npm won’t necessarily show them.
+
+Find the process serving port xxxx:
+``` lsof -nP -iTCP:5316 -sTCP:LISTEN ```
+
+Check the listed PID before stopping it:
+
+``` ps -p <PID> -o pid,ppid,command ```
+
+Then stop that specific process:
+
+```kill -TERM <PID>```
+
+The backend may still be running on port 5005. Check it the same way:
+```lsof -nP -iTCP:5005 -sTCP:LISTEN```
+
+Stop its specific PID with kill -TERM <PID> too. Replace <PID> with the number shown by lsof; don’t include the angle brackets.

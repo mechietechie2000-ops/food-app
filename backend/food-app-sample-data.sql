@@ -1,397 +1,227 @@
--- Sample data for Food App first-cut SQLite schema
--- Assumes the tables from food-app-first-cut-schema.sql already exist.
--- IDs are intentionally omitted where possible so SQLite can assign them.
+-- Idempotent representative seed data for food_app_schema_final.sql.
+-- Staple ingredients are always available and never get inventory lots.
 
 PRAGMA foreign_keys = ON;
 
 BEGIN TRANSACTION;
 
--- ============================================================
--- 1. INGREDIENT
--- ============================================================
-
-INSERT INTO ingredient
-    (name, category, inventory_type, always_available)
+INSERT OR IGNORE INTO item
+    (name, category, inventory_type, is_veg, default_shelf_life_days, always_available)
 VALUES
-    ('Onion',           'Vegetable', 'STAPLE', 1),
-    ('Tomato',          'Vegetable', 'STAPLE', 1),
-    ('Potato',          'Vegetable', 'STAPLE', 1),
-    ('Garlic',          'Aromatic', 'STAPLE', 1),
-    ('Ginger',          'Aromatic', 'STAPLE', 1),
-    ('Green Chili',     'Aromatic', 'STAPLE', 1),
-    ('Cilantro',        'Herb',     'STAPLE', 1),
-    ('Rice',            'Grain',    'STAPLE', 1),
-    ('Toor Dal',        'Dal',      'STAPLE', 1),
-    ('Moong Dal',       'Dal',      'STAPLE', 1),
-    ('Wheat Flour',     'Flour',    'STAPLE', 1),
-    ('Oil',             'Cooking',  'STAPLE', 1),
-    ('Salt',            'Spice',    'STAPLE', 1),
-    ('Turmeric',        'Spice',    'STAPLE', 1),
-    ('Cumin',            'Spice',    'STAPLE', 1),
-    ('Garam Masala',    'Spice',    'STAPLE', 1),
+    ('Onion', 'staple', 'STAPLE', 1, 30, 1),
+    ('Tomato', 'staple', 'STAPLE', 1, 7, 1),
+    ('Potato', 'staple', 'STAPLE', 1, 30, 1),
+    ('Garlic', 'staple', 'STAPLE', 1, 30, 1),
+    ('Ginger', 'staple', 'STAPLE', 1, 21, 1),
+    ('Green Chili', 'staple', 'STAPLE', 1, 7, 1),
+    ('Cilantro', 'staple', 'STAPLE', 1, 5, 1),
+    ('Rice', 'staple', 'STAPLE', 1, 365, 1),
+    ('Toor Dal', 'dal', 'STAPLE', 1, 365, 1),
+    ('Moong Dal', 'dal', 'STAPLE', 1, 365, 1),
+    ('Wheat Flour', 'staple', 'STAPLE', 1, 90, 1),
+    ('Oil', 'staple', 'STAPLE', 1, 365, 1),
+    ('Salt', 'spice', 'STAPLE', 1, 365, 1),
+    ('Turmeric', 'spice', 'STAPLE', 1, 365, 1),
+    ('Cumin', 'spice', 'STAPLE', 1, 365, 1),
+    ('Garam Masala', 'spice', 'STAPLE', 1, 365, 1),
+    ('Bhindi', 'green_veggie', 'FRESH', 1, 5, 0),
+    ('Lauki', 'green_veggie', 'FRESH', 1, 7, 0),
+    ('Baingan', 'green_veggie', 'FRESH', 1, 6, 0),
+    ('Cauliflower', 'green_veggie', 'FRESH', 1, 7, 0),
+    ('Carrot', 'green_veggie', 'FRESH', 1, 10, 0),
+    ('Green Beans', 'green_veggie', 'FRESH', 1, 5, 0),
+    ('Cabbage', 'green_veggie', 'FRESH', 1, 10, 0),
+    ('Bell Pepper', 'green_veggie', 'FRESH', 1, 7, 0),
+    ('Spinach', 'green_veggie', 'FRESH', 1, 4, 0),
+    ('Methi', 'green_veggie', 'FRESH', 1, 4, 0),
+    ('Peas', 'green_veggie', 'FRESH', 1, 5, 0);
 
-    ('Bhindi',          'Vegetable', 'FRESH', 0),
-    ('Lauki',           'Vegetable', 'FRESH', 0),
-    ('Baingan',         'Vegetable', 'FRESH', 0),
-    ('Cauliflower',     'Vegetable', 'FRESH', 0),
-    ('Carrot',          'Vegetable', 'FRESH', 0),
-    ('Green Beans',     'Vegetable', 'FRESH', 0),
-    ('Cabbage',         'Vegetable', 'FRESH', 0),
-    ('Bell Pepper',     'Vegetable', 'FRESH', 0),
-    ('Spinach',         'Leafy Green', 'FRESH', 0),
-    ('Methi',           'Leafy Green', 'FRESH', 0);
-
--- ============================================================
--- 2. RECIPES
--- ============================================================
-
-INSERT INTO recipe
-    (name, description, instructions, cuisine, meal_type, approved, cooldown_days)
+INSERT OR IGNORE INTO recipe
+    (name, description, instructions, cuisine, meal_type, is_veg,
+     suitable_for_kids_tiffin, suitable_for_adult_tiffin,
+     suitable_for_adult_dinner, approved, cooldown_days)
 VALUES
-(
-    'Bhindi Masala',
-    'Okra cooked with onion, tomato and Indian spices.',
-    'Wash and dry bhindi. Slice. Saute with oil and spices. Add onion and tomato and cook until done.',
-    'Indian',
-    'Dinner',
-    1,
-    21
-),
-(
-    'Aloo Gobi',
-    'Potato and cauliflower cooked with Indian spices.',
-    'Saute potato and cauliflower with onion, tomato and spices until tender.',
-    'Indian',
-    'Dinner',
-    1,
-    21
-),
-(
-    'Baingan Bharta',
-    'Roasted eggplant cooked with onion, tomato and spices.',
-    'Roast eggplant, remove skin, mash and cook with onion, tomato and spices.',
-    'Indian',
-    'Dinner',
-    1,
-    21
-),
-(
-    'Lauki Dal',
-    'Bottle gourd cooked with dal.',
-    'Cook dal and lauki together, then temper with cumin, garlic and spices.',
-    'Indian',
-    'Dinner',
-    1,
-    21
-),
-(
-    'Gajar Matar',
-    'Carrot and peas cooked with Indian spices.',
-    'Cook carrot and peas with onion, tomato and spices until tender.',
-    'Indian',
-    'Dinner',
-    1,
-    21
-),
-(
-    'Palak Dal',
-    'Spinach cooked with dal.',
-    'Cook dal and spinach together and finish with a cumin-garlic tempering.',
-    'Indian',
-    'Dinner',
-    1,
-    21
-),
-(
-    'Poori',
-    'Deep-fried Indian wheat bread.',
-    'Prepare wheat flour dough and deep fry small rolled portions.',
-    'Indian',
-    'Festival',
-    1,
-    21
-),
-(
-    'Aloo Sabzi',
-    'Potato curry commonly served with poori.',
-    'Cook potatoes with onion, tomato and spices.',
-    'Indian',
-    'Festival',
-    1,
-    21
-),
-(
-    'Sooji Halwa',
-    'Semolina dessert.',
-    'Roast semolina and cook with water, sugar and ghee.',
-    'Indian',
-    'Festival',
-    1,
-    21
-);
+    ('Bhindi Masala', 'Okra cooked with onion, tomato and Indian spices.',
+     'Wash and dry bhindi. Slice and saute with oil and spices. Add onion and tomato and cook until tender.',
+     'Indian', 'sabzi', 1, 0, 0, 1, 1, 21),
+    ('Aloo Gobi', 'Potato and cauliflower cooked with Indian spices.',
+     'Saute potato and cauliflower with onion, tomato and spices until tender.',
+     'Indian', 'sabzi', 1, 1, 0, 1, 1, 21),
+    ('Baingan Bharta', 'Roasted eggplant cooked with onion, tomato and spices.',
+     'Roast eggplant, remove the skin, mash and cook with onion, tomato and spices.',
+     'Indian', 'sabzi', 1, 0, 0, 1, 1, 21),
+    ('Lauki Dal', 'Bottle gourd cooked with dal.',
+     'Cook dal and lauki together, then temper with cumin, garlic and spices.',
+     'Indian', 'dal', 1, 1, 0, 1, 1, 21),
+    ('Gajar Matar', 'Carrot and peas cooked with Indian spices.',
+     'Cook carrot and peas with onion, tomato and spices until tender.',
+     'Indian', 'sabzi', 1, 1, 0, 1, 1, 21),
+    ('Palak Dal', 'Spinach cooked with dal.',
+     'Cook dal and spinach together and finish with a cumin-garlic tempering.',
+     'Indian', 'dal', 1, 1, 0, 1, 1, 21),
+    ('Mixed Vegetable', 'A flexible vegetable curry using the fresh vegetables on hand.',
+     'Cook the required carrot with any available optional vegetables, onion, tomato and spices until tender.',
+     'Indian', 'sabzi', 1, 1, 0, 1, 1, 21);
 
--- ============================================================
--- 3. RECIPE INGREDIENTS
--- ============================================================
--- IDs correspond to insertion order above.
-
--- Bhindi Masala: Bhindi required; onion/tomato/etc. are staples.
-INSERT INTO recipe_ingredient (recipe_id, ingredient_id, role)
+INSERT OR IGNORE INTO recipe_item (recipe_id, item_id, role)
 SELECT r.id, i.id, x.role
+FROM (
+    SELECT 'Bhindi Masala' AS recipe, 'Bhindi' AS item, 'REQUIRED' AS role
+    UNION ALL SELECT 'Bhindi Masala', 'Onion', 'OPTIONAL'
+    UNION ALL SELECT 'Bhindi Masala', 'Tomato', 'OPTIONAL'
+    UNION ALL SELECT 'Bhindi Masala', 'Garlic', 'OPTIONAL'
+    UNION ALL SELECT 'Aloo Gobi', 'Potato', 'REQUIRED'
+    UNION ALL SELECT 'Aloo Gobi', 'Cauliflower', 'REQUIRED'
+    UNION ALL SELECT 'Aloo Gobi', 'Onion', 'OPTIONAL'
+    UNION ALL SELECT 'Aloo Gobi', 'Tomato', 'OPTIONAL'
+    UNION ALL SELECT 'Baingan Bharta', 'Baingan', 'REQUIRED'
+    UNION ALL SELECT 'Baingan Bharta', 'Onion', 'OPTIONAL'
+    UNION ALL SELECT 'Baingan Bharta', 'Tomato', 'OPTIONAL'
+    UNION ALL SELECT 'Lauki Dal', 'Lauki', 'REQUIRED'
+    UNION ALL SELECT 'Lauki Dal', 'Toor Dal', 'REQUIRED'
+    UNION ALL SELECT 'Lauki Dal', 'Garlic', 'OPTIONAL'
+    UNION ALL SELECT 'Gajar Matar', 'Carrot', 'REQUIRED'
+    UNION ALL SELECT 'Gajar Matar', 'Peas', 'OPTIONAL'
+    UNION ALL SELECT 'Gajar Matar', 'Onion', 'OPTIONAL'
+    UNION ALL SELECT 'Palak Dal', 'Spinach', 'REQUIRED'
+    UNION ALL SELECT 'Palak Dal', 'Moong Dal', 'REQUIRED'
+    UNION ALL SELECT 'Palak Dal', 'Garlic', 'OPTIONAL'
+    UNION ALL SELECT 'Mixed Vegetable', 'Carrot', 'REQUIRED'
+    UNION ALL SELECT 'Mixed Vegetable', 'Green Beans', 'OPTIONAL'
+    UNION ALL SELECT 'Mixed Vegetable', 'Cauliflower', 'OPTIONAL'
+    UNION ALL SELECT 'Mixed Vegetable', 'Peas', 'OPTIONAL'
+    UNION ALL SELECT 'Mixed Vegetable', 'Potato', 'OPTIONAL'
+) AS x
+JOIN recipe r ON r.name = x.recipe
+JOIN item i ON i.name = x.item;
+
+-- Purchase lots stay distinct, including the two Bhindi purchases.
+INSERT INTO inventory (item_id, purchase_date, expiry_date, store, status)
+SELECT i.id, '2026-09-22', '2026-09-27', 'Costco', 'AVAILABLE'
+FROM item i
+WHERE i.name = 'Bhindi'
+  AND NOT EXISTS (
+      SELECT 1 FROM inventory inv
+      WHERE inv.item_id = i.id AND inv.purchase_date = '2026-09-22' AND inv.store = 'Costco'
+  );
+
+INSERT INTO inventory (item_id, purchase_date, expiry_date, store, status)
+SELECT i.id, '2026-09-26', '2026-10-01', 'Indian Grocery Store', 'AVAILABLE'
+FROM item i
+WHERE i.name = 'Bhindi'
+  AND NOT EXISTS (
+      SELECT 1 FROM inventory inv
+      WHERE inv.item_id = i.id AND inv.purchase_date = '2026-09-26' AND inv.store = 'Indian Grocery Store'
+  );
+
+INSERT INTO inventory (item_id, purchase_date, expiry_date, store, status)
+SELECT i.id, '2026-09-25', '2026-10-02', 'Indian Grocery Store', 'AVAILABLE'
+FROM item i
+WHERE i.name = 'Lauki'
+  AND NOT EXISTS (
+      SELECT 1 FROM inventory inv
+      WHERE inv.item_id = i.id AND inv.purchase_date = '2026-09-25' AND inv.store = 'Indian Grocery Store'
+  );
+
+INSERT INTO inventory (item_id, purchase_date, expiry_date, store, status)
+SELECT i.id, '2026-09-24', '2026-09-30', 'Indian Grocery Store', 'AVAILABLE'
+FROM item i
+WHERE i.name = 'Baingan'
+  AND NOT EXISTS (
+      SELECT 1 FROM inventory inv
+      WHERE inv.item_id = i.id AND inv.purchase_date = '2026-09-24' AND inv.store = 'Indian Grocery Store'
+  );
+
+INSERT INTO inventory (item_id, purchase_date, expiry_date, store, status)
+SELECT i.id, '2026-09-22', '2026-09-29', 'Costco', 'AVAILABLE'
+FROM item i
+WHERE i.name = 'Cauliflower'
+  AND NOT EXISTS (
+      SELECT 1 FROM inventory inv
+      WHERE inv.item_id = i.id AND inv.purchase_date = '2026-09-22' AND inv.store = 'Costco'
+  );
+
+INSERT INTO inventory (item_id, purchase_date, expiry_date, store, status)
+SELECT i.id, '2026-09-22', '2026-10-02', 'Costco', 'AVAILABLE'
+FROM item i
+WHERE i.name = 'Carrot'
+  AND NOT EXISTS (
+      SELECT 1 FROM inventory inv
+      WHERE inv.item_id = i.id AND inv.purchase_date = '2026-09-22' AND inv.store = 'Costco'
+  );
+
+INSERT INTO inventory (item_id, purchase_date, expiry_date, store, status)
+SELECT i.id, '2026-09-26', '2026-09-30', 'Indian Grocery Store', 'AVAILABLE'
+FROM item i
+WHERE i.name = 'Spinach'
+  AND NOT EXISTS (
+      SELECT 1 FROM inventory inv
+      WHERE inv.item_id = i.id AND inv.purchase_date = '2026-09-26' AND inv.store = 'Indian Grocery Store'
+  );
+
+INSERT OR IGNORE INTO festival (name, description)
+VALUES ('Diwali', 'Festival of Lights'),
+       ('Holi', 'Festival of Colors'),
+       ('Janmashtami', 'Festival associated with the birth of Krishna');
+
+-- Keep the sample calendar demonstration clear of a misleading current festival.
+INSERT INTO calendar_date (calendar_date, festival_id, lunar_date, dietary_restriction, notes)
+SELECT '2026-10-20', f.id, 'Sample lunar date', 'none', 'Sample calendar record'
+FROM festival f
+WHERE f.name = 'Diwali'
+  AND NOT EXISTS (
+      SELECT 1 FROM calendar_date cd
+      WHERE cd.calendar_date = '2026-10-20' AND cd.festival_id = f.id
+  );
+
+INSERT INTO weekly_meal_plan (recipe_id, meal_date, meal_slot, status)
+SELECT r.id, '2026-09-21', 'dinner', 'planned'
 FROM recipe r
-JOIN (
-    SELECT 'Bhindi' AS name, 'REQUIRED' AS role
-    UNION ALL SELECT 'Onion', 'REQUIRED'
-    UNION ALL SELECT 'Tomato', 'REQUIRED'
-    UNION ALL SELECT 'Garlic', 'OPTIONAL'
-    UNION ALL SELECT 'Green Chili', 'OPTIONAL'
-) x
-JOIN ingredient i ON i.name = x.name
-WHERE r.name = 'Bhindi Masala';
+WHERE r.name = 'Bhindi Masala'
+  AND NOT EXISTS (
+      SELECT 1 FROM weekly_meal_plan p
+      WHERE p.meal_date = '2026-09-21'
+        AND p.meal_slot = 'dinner'
+  );
 
--- Aloo Gobi
-INSERT INTO recipe_ingredient (recipe_id, ingredient_id, role)
-SELECT r.id, i.id, x.role
+INSERT INTO weekly_meal_plan (recipe_id, meal_date, meal_slot, status)
+SELECT r.id, '2026-09-22', 'dinner', 'planned'
 FROM recipe r
-JOIN (
-    SELECT 'Potato' AS name, 'REQUIRED' AS role
-    UNION ALL SELECT 'Cauliflower', 'REQUIRED'
-    UNION ALL SELECT 'Onion', 'REQUIRED'
-    UNION ALL SELECT 'Tomato', 'REQUIRED'
-) x
-JOIN ingredient i ON i.name = x.name
-WHERE r.name = 'Aloo Gobi';
+WHERE r.name = 'Lauki Dal'
+  AND NOT EXISTS (
+      SELECT 1 FROM weekly_meal_plan p
+      WHERE p.meal_date = '2026-09-22'
+        AND p.meal_slot = 'dinner'
+  );
 
--- Baingan Bharta
-INSERT INTO recipe_ingredient (recipe_id, ingredient_id, role)
-SELECT r.id, i.id, x.role
+INSERT INTO weekly_meal_plan (recipe_id, meal_date, meal_slot, status)
+SELECT r.id, '2026-09-23', 'dinner', 'planned'
 FROM recipe r
-JOIN (
-    SELECT 'Baingan' AS name, 'REQUIRED' AS role
-    UNION ALL SELECT 'Onion', 'REQUIRED'
-    UNION ALL SELECT 'Tomato', 'REQUIRED'
-    UNION ALL SELECT 'Garlic', 'OPTIONAL'
-    UNION ALL SELECT 'Green Chili', 'OPTIONAL'
-) x
-JOIN ingredient i ON i.name = x.name
-WHERE r.name = 'Baingan Bharta';
+WHERE r.name = 'Baingan Bharta'
+  AND NOT EXISTS (
+      SELECT 1 FROM weekly_meal_plan p
+      WHERE p.meal_date = '2026-09-23'
+        AND p.meal_slot = 'dinner'
+  );
 
--- Lauki Dal
-INSERT INTO recipe_ingredient (recipe_id, ingredient_id, role)
-SELECT r.id, i.id, x.role
+INSERT INTO weekly_meal_plan (recipe_id, meal_date, meal_slot, status)
+SELECT r.id, '2026-09-25', 'kids_tiffin', 'planned'
 FROM recipe r
-JOIN (
-    SELECT 'Lauki' AS name, 'REQUIRED' AS role
-    UNION ALL SELECT 'Toor Dal', 'REQUIRED'
-    UNION ALL SELECT 'Onion', 'OPTIONAL'
-    UNION ALL SELECT 'Garlic', 'OPTIONAL'
-) x
-JOIN ingredient i ON i.name = x.name
-WHERE r.name = 'Lauki Dal';
+WHERE r.name = 'Gajar Matar'
+  AND NOT EXISTS (
+      SELECT 1 FROM weekly_meal_plan p
+      WHERE p.meal_date = '2026-09-25'
+        AND p.meal_slot = 'kids_tiffin'
+  );
 
--- Gajar Matar
-INSERT INTO recipe_ingredient (recipe_id, ingredient_id, role)
-SELECT r.id, i.id, x.role
+INSERT INTO weekly_meal_plan (recipe_id, meal_date, meal_slot, status)
+SELECT r.id, '2026-09-26', 'weekend_lunch', 'planned'
 FROM recipe r
-JOIN (
-    SELECT 'Carrot' AS name, 'REQUIRED' AS role
-    UNION ALL SELECT 'Green Beans', 'OPTIONAL'
-    UNION ALL SELECT 'Onion', 'REQUIRED'
-    UNION ALL SELECT 'Tomato', 'OPTIONAL'
-) x
-JOIN ingredient i ON i.name = x.name
-WHERE r.name = 'Gajar Matar';
-
--- Palak Dal
-INSERT INTO recipe_ingredient (recipe_id, ingredient_id, role)
-SELECT r.id, i.id, x.role
-FROM recipe r
-JOIN (
-    SELECT 'Spinach' AS name, 'REQUIRED' AS role
-    UNION ALL SELECT 'Moong Dal', 'REQUIRED'
-    UNION ALL SELECT 'Garlic', 'OPTIONAL'
-) x
-JOIN ingredient i ON i.name = x.name
-WHERE r.name = 'Palak Dal';
-
--- Poori
-INSERT INTO recipe_ingredient (recipe_id, ingredient_id, role)
-SELECT r.id, i.id, 'REQUIRED'
-FROM recipe r
-JOIN ingredient i ON i.name = 'Wheat Flour'
-WHERE r.name = 'Poori';
-
--- Aloo Sabzi
-INSERT INTO recipe_ingredient (recipe_id, ingredient_id, role)
-SELECT r.id, i.id, x.role
-FROM recipe r
-JOIN (
-    SELECT 'Potato' AS name, 'REQUIRED' AS role
-    UNION ALL SELECT 'Onion', 'OPTIONAL'
-    UNION ALL SELECT 'Tomato', 'OPTIONAL'
-) x
-JOIN ingredient i ON i.name = x.name
-WHERE r.name = 'Aloo Sabzi';
-
--- Sooji Halwa
-INSERT INTO recipe_ingredient (recipe_id, ingredient_id, role)
-SELECT r.id, i.id, 'REQUIRED'
-FROM recipe r
-JOIN ingredient i ON i.name = 'Wheat Flour'
-WHERE r.name = 'Sooji Halwa';
-
--- ============================================================
--- 4. INVENTORY
--- ============================================================
--- Fresh purchases are separate lots. Older lots can be consumed first.
-
-INSERT INTO inventory
-    (ingredient_id, purchase_date, store, status)
-SELECT id, '2026-09-22', 'Costco', 'AVAILABLE'
-FROM ingredient WHERE name = 'Cauliflower';
-
-INSERT INTO inventory
-    (ingredient_id, purchase_date, store, status)
-SELECT id, '2026-09-22', 'Costco', 'AVAILABLE'
-FROM ingredient WHERE name = 'Carrot';
-
-INSERT INTO inventory
-    (ingredient_id, purchase_date, store, status)
-SELECT id, '2026-09-23', 'Indian Grocery Store', 'AVAILABLE'
-FROM ingredient WHERE name = 'Bhindi';
-
-INSERT INTO inventory
-    (ingredient_id, purchase_date, store, status)
-SELECT id, '2026-09-24', 'Indian Grocery Store', 'AVAILABLE'
-FROM ingredient WHERE name = 'Baingan';
-
-INSERT INTO inventory
-    (ingredient_id, purchase_date, store, status)
-SELECT id, '2026-09-25', 'Indian Grocery Store', 'AVAILABLE'
-FROM ingredient WHERE name = 'Lauki';
-
--- Second Bhindi purchase demonstrates separate inventory lots.
-INSERT INTO inventory
-    (ingredient_id, purchase_date, store, status)
-SELECT id, '2026-09-26', 'Indian Grocery Store', 'AVAILABLE'
-FROM ingredient WHERE name = 'Bhindi';
-
--- ============================================================
--- 5. MEAL
--- ============================================================
--- These are examples of suggestions/plans, not necessarily
--- proof that the food was cooked.
-
-INSERT INTO meal (recipe_id, meal_date, meal_type, status)
-SELECT id, '2026-09-27', 'Dinner', 'SUGGESTED'
-FROM recipe WHERE name = 'Bhindi Masala';
-
-INSERT INTO meal (recipe_id, meal_date, meal_type, status)
-SELECT id, '2026-09-28', 'Dinner', 'PLANNED'
-FROM recipe WHERE name = 'Aloo Gobi';
-
--- ============================================================
--- 6. MEAL HISTORY
--- ============================================================
--- Only actual cooked meals belong here.
-
-INSERT INTO meal_history
-    (recipe_id, cooked_date, meal_type, source)
-SELECT id, '2026-09-10', 'Dinner', 'USER'
-FROM recipe WHERE name = 'Baingan Bharta';
-
-INSERT INTO meal_history
-    (recipe_id, cooked_date, meal_type, source)
-SELECT id, '2026-09-15', 'Dinner', 'CONFIRMATION'
-FROM recipe WHERE name = 'Aloo Gobi';
-
--- ============================================================
--- 7. FESTIVAL
--- ============================================================
-
-INSERT INTO festival (name, description)
-VALUES
-    ('Diwali', 'Festival of Lights'),
-    ('Holi', 'Festival of Colors'),
-    ('Janmashtami', 'Festival associated with the birth of Krishna'),
-    ('Navratri', 'Nine-night Hindu festival'),
-    ('Raksha Bandhan', 'Festival celebrating the sibling bond'),
-    ('Makar Sankranti', 'Harvest festival associated with the Sun');
-
--- ============================================================
--- 8. FESTIVAL_RECIPE
--- ============================================================
--- Family preference = 1 means this is one of the family's
--- usual recipes for the festival.
-
-INSERT INTO festival_recipe
-    (festival_id, recipe_id, family_preference)
-SELECT f.id, r.id, 1
-FROM festival f, recipe r
-WHERE f.name = 'Diwali' AND r.name = 'Poori';
-
-INSERT INTO festival_recipe
-    (festival_id, recipe_id, family_preference)
-SELECT f.id, r.id, 1
-FROM festival f, recipe r
-WHERE f.name = 'Diwali' AND r.name = 'Aloo Sabzi';
-
-INSERT INTO festival_recipe
-    (festival_id, recipe_id, family_preference)
-SELECT f.id, r.id, 1
-FROM festival f, recipe r
-WHERE f.name = 'Diwali' AND r.name = 'Sooji Halwa';
-
-INSERT INTO festival_recipe
-    (festival_id, recipe_id, family_preference)
-SELECT f.id, r.id, 0
-FROM festival f, recipe r
-WHERE f.name = 'Holi' AND r.name = 'Poori';
-
-INSERT INTO festival_recipe
-    (festival_id, recipe_id, family_preference)
-SELECT f.id, r.id, 0
-FROM festival f, recipe r
-WHERE f.name = 'Holi' AND r.name = 'Aloo Sabzi';
-
--- ============================================================
--- 9. INDIAN_CALENDAR
--- ============================================================
--- Sample dates only. These are demonstration records for testing.
--- Production dates should be populated from the selected Indian
--- calendar source after we decide which source to use.
-
-INSERT INTO indian_calendar
-    (calendar_date, festival_id, festival_name, lunar_date, notes)
-SELECT
-    '2026-10-20',
-    id,
-    name,
-    'Kartika Shukla Pratipada',
-    'Sample calendar record'
-FROM festival
-WHERE name = 'Diwali';
-
-INSERT INTO indian_calendar
-    (calendar_date, festival_id, festival_name, lunar_date, notes)
-SELECT
-    '2027-03-22',
-    id,
-    name,
-    NULL,
-    'Sample calendar record'
-FROM festival
-WHERE name = 'Holi';
-
-INSERT INTO indian_calendar
-    (calendar_date, festival_id, festival_name, lunar_date, notes)
-SELECT
-    '2027-08-25',
-    id,
-    name,
-    NULL,
-    'Sample calendar record'
-FROM festival
-WHERE name = 'Janmashtami';
+WHERE r.name = 'Mixed Vegetable'
+  AND NOT EXISTS (
+      SELECT 1 FROM weekly_meal_plan p
+      WHERE p.meal_date = '2026-09-26'
+        AND p.meal_slot = 'weekend_lunch'
+  );
 
 COMMIT;

@@ -1,0 +1,15 @@
+npm run app starts Node child processes for the API and frontend. Killing the npm process can leave those children running, so ps | grep npm won’t necessarily show them.
+
+Find the process serving port 5316:
+
+
+Check the listed PID before stopping it:
+
+
+Then stop that specific process:
+
+
+The backend may still be running on port 5005. Check it the same way:
+
+
+Stop its specific PID with kill -TERM <PID> too. Replace <PID> with the number shown by lsof; don’t include the angle brackets.

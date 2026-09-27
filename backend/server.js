@@ -9,6 +9,8 @@ const webPush = require('web-push');
 require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 
 const Database = require('better-sqlite3');
+const foodRoutes = require('./routes/food');
+const { initializeFoodData } = require('./db/foodData');
 
 const port = Number(process.env.PORT || 5005);
 const isProduction = process.env.NODE_ENV === 'production';
@@ -48,6 +50,7 @@ database.exec(`
   )
 `);
 database.pragma('foreign_keys = ON');
+initializeFoodData(database);
 
 if (pushConfigured) {
   webPush.setVapidDetails(vapidSubject, vapidPublicKey, vapidPrivateKey);
@@ -174,6 +177,8 @@ const authenticate = (req, res, next) => {
     return res.status(401).json({ error: 'Your session has expired. Please sign in again.' });
   }
 };
+
+app.use('/api/food', authenticate, foodRoutes(database));
 
 app.get('/api/push/vapidPublicKey', (_req, res) => {
   if (!pushConfigured) {

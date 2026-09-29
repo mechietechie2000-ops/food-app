@@ -49,6 +49,7 @@ function AppContent() {
           <Route path="/register" element={<RegisterPage />} />
           <Route element={<ProtectedRoute />}>
             <Route path="/" element={<HomePage />} />
+            <Route path="/settings" element={<HomePage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>

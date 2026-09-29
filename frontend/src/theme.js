@@ -1,4 +1,5 @@
-import { createContext, useState, useMemo } from "react";
+import { createContext, useCallback, useMemo, useState } from "react";
+import { useMediaQuery } from "@mui/material";
 import { createTheme } from "@mui/material/styles";
 
 // color design tokens export
@@ -201,23 +202,33 @@ export const themeSettings = (mode) => {
 // context for color mode
 export const ColorModeContext = createContext({
   toggleColorMode: () => {},
+  setColorMode: () => {},
+  preference: "dark",
 });
 
 export const useMode = () => {
-  const [mode, setMode] = useState(
-    () => localStorage.getItem("colorMode") || "dark"
-  );
+  const [preference, setPreference] = useState(() => {
+    const storedPreference = localStorage.getItem("colorMode");
+    return ["light", "dark", "system"].includes(storedPreference) ? storedPreference : "dark";
+  });
+  const prefersDarkMode = useMediaQuery("(prefers-color-scheme: dark)");
+  const mode = preference === "system" ? (prefersDarkMode ? "dark" : "light") : preference;
+
+  const setColorMode = useCallback((nextPreference) => {
+    if (!["light", "dark", "system"].includes(nextPreference)) {
+      throw new Error(`Unsupported color mode: ${nextPreference}`);
+    }
+    localStorage.setItem("colorMode", nextPreference);
+    setPreference(nextPreference);
+  }, []);
 
   const colorMode = useMemo(
     () => ({
-      toggleColorMode: () =>
-        setMode((prev) => {
-          const next = prev === "light" ? "dark" : "light";
-          localStorage.setItem("colorMode", next);
-          return next;
-        }),
+      preference,
+      setColorMode,
+      toggleColorMode: () => setColorMode(mode === "light" ? "dark" : "light"),
     }),
-    []
+    [mode, preference, setColorMode]
   );
 
   const theme = useMemo(() => createTheme(themeSettings(mode)), [mode]);

@@ -1,93 +1,61 @@
-import { useEffect, useState } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
 import { BottomNavigation, BottomNavigationAction, Paper, useTheme } from '@mui/material';
-import HomeOutlinedIcon from '@mui/icons-material/HomeOutlined';
-import AddCircleOutlinedIcon from '@mui/icons-material/AddCircleOutlined';
-import SearchIcon from '@mui/icons-material/Search';
-import CloudUploadOutlinedIcon from '@mui/icons-material/CloudUploadOutlined';
-import CalendarTodayOutlinedIcon from '@mui/icons-material/CalendarTodayOutlined';
+import AddIcon from '@mui/icons-material/Add';
+import MenuOutlinedIcon from '@mui/icons-material/MenuOutlined';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { tokens } from '../../theme';
 
-// Index -> route. `null` entries (Search) have no destination yet — they're
-// placeholders until those features exist, so onChange no-ops for them.
-//
-// "Add" used to route to /add-task (the category-based AddTaskForm — see
-// scenes/tasks/AddTask.jsx). That form still exists and its route is still
-// registered in App.js for later use, but it was never wired into the
-// generic sectionFields/SectionForm system this app otherwise uses, so
-// bottom-nav "+" now opens the Todo Task quick-add instead (generic
-// SectionForm, consistent with every other section's "+").
+export const BOTTOM_NAV_HEIGHT = 56;
 
-const ROUTES = ['/', '/todo-task/new', null, '/digiLocker', '/calendar'];
-
-export const BOTTOM_NAV_HEIGHT = 56; // MUI BottomNavigation's default height
-
-const BottomNav = () => {
+export default function BottomNav({ onAddClick }) {
   const theme = useTheme();
   const colors = tokens(theme.palette.mode);
-  const navigate = useNavigate();
   const location = useLocation();
+  const navigate = useNavigate();
+  const value = location.pathname === '/settings' ? 'settings' : 'add';
 
-  const currentIndex = ROUTES.indexOf(location.pathname);
-  const [value, setValue] = useState(currentIndex === -1 ? false : currentIndex);
-
-  // Keep the highlighted tab in sync if the user navigates some other way
-  // (sidebar drawer, back button, deep link) rather than tapping this bar.
-  useEffect(() => {
-    const idx = ROUTES.indexOf(location.pathname);
-    setValue(idx === -1 ? false : idx);
-  }, [location.pathname]);
-
-  const handleChange = (_event, newValue) => {
-    setValue(newValue);
-    const target = ROUTES[newValue];
-    if (target) navigate(target);
-    // else: Search — no destination yet.
+  const handleChange = (_event, selected) => {
+    if (selected === 'settings') {
+      navigate('/settings');
+    }
   };
 
   return (
     <Paper
       elevation={8}
       sx={{
-        backgroundColor: colors.primary[400],
-        backgroundImage: 'none',  
         position: 'fixed',
-        bottom: 0,
         left: 0,
         right: 0,
+        bottom: 0,
         zIndex: theme.zIndex.appBar,
-        // Clears the home-indicator bar on notched/installed-PWA phones.
-        paddingBottom: 'env(safe-area-inset-bottom)',
+        pb: 'env(safe-area-inset-bottom)',
+        bgcolor: colors.primary[400],
+        backgroundImage: 'none',
       }}
     >
       <BottomNavigation
-        showLabels
         value={value}
         onChange={handleChange}
-        //sx={{ backgroundColor: colors.primary[400], height: BOTTOM_NAV_HEIGHT, marginBottom:2, marginLeft:2, marginRight:2 }}
+        showLabels
         sx={{
-          backgroundColor: colors.primary[400],
           height: BOTTOM_NAV_HEIGHT,
-          marginBottom: 2,
-          marginLeft: 2,
-          marginRight: 2,
-          borderRadius: '8px',
-          '& .MuiBottomNavigationAction-root': {
-            color: colors.grey[100],
-          },
-          '& .Mui-selected': {
-            color: colors.greenAccent[400],
-          },
+          bgcolor: colors.primary[400],
+          '& .MuiBottomNavigationAction-root': { color: colors.grey[500] },
+          '& .Mui-selected': { color: colors.greenAccent[600] },
         }}
       >
-        <BottomNavigationAction label="Home" icon={<HomeOutlinedIcon />} />
-        <BottomNavigationAction label="Todo" icon={<AddCircleOutlinedIcon />} />
-        <BottomNavigationAction label="Search" icon={<SearchIcon />} />
-        <BottomNavigationAction label="Upload" icon={<CloudUploadOutlinedIcon />} />
-        <BottomNavigationAction label="Calendar" icon={<CalendarTodayOutlinedIcon />} />
+        <BottomNavigationAction
+          value="add"
+          label="Add"
+          icon={<AddIcon />}
+          onClick={onAddClick}
+        />
+        <BottomNavigationAction
+          value="settings"
+          label="Menu"
+          icon={<MenuOutlinedIcon />}
+        />
       </BottomNavigation>
     </Paper>
   );
-};
-
-export default BottomNav;
+}

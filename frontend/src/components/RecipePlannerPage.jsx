@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
-  AppBar,
   Box,
   Button,
   Card,
   CardContent,
   Checkbox,
+  Chip,
   CircularProgress,
   Dialog,
   DialogActions,
@@ -19,18 +19,18 @@ import {
   Menu,
   MenuItem,
   TextField,
-  Toolbar,
   Typography,
   useTheme,
 } from '@mui/material';
-import AddIcon from '@mui/icons-material/Add';
 import CloseIcon from '@mui/icons-material/Close';
 import ReceiptLongOutlinedIcon from '@mui/icons-material/ReceiptLongOutlined';
 import RestaurantMenuOutlinedIcon from '@mui/icons-material/RestaurantMenuOutlined';
+import { useLocation } from 'react-router-dom';
 import { tokens } from '../theme';
-import { useAuth } from '../context/useAuth';
 import { api } from '../services/api';
-import PushNotificationSettings from './PushNotificationSettings';
+import BottomNav from '../scenes/global/BottomNav';
+import PlannerSettingsPage from './PlannerSettingsPage';
+import PlannerTopbar from './PlannerTopbar';
 
 const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const MEALS = ['Kids Tiffin', 'Lunch', 'Dinner'];
@@ -65,7 +65,20 @@ function mealLabel(slot) {
   return MEAL_SLOTS.find((meal) => meal.value === slot)?.label || slot;
 }
 
-function DayCard({ day, meals, colors, onConfirm }) {
+function planStatusLabel(status) {
+  if (status === 'confirmed_cooked') return 'Cooked';
+  if (status === 'confirmed_skipped') return 'Skipped';
+  if (status === 'other') return 'Other';
+  return status.replaceAll('_', ' ');
+}
+
+function statusColor(status) {
+  if (status === 'confirmed_cooked') return 'success';
+  if (status === 'confirmed_skipped') return 'error';
+  return 'info';
+}
+
+function DayCard({ day, meals, dalSuggestion, pairedVegetable, colors, onConfirm, onPlanDal }) {
   const mealLabels = meals['Adult Tiffin'] ? [...MEALS.slice(0, 1), 'Adult Tiffin', ...MEALS.slice(1)] : MEALS;
   return (
     <Card
@@ -83,6 +96,9 @@ function DayCard({ day, meals, colors, onConfirm }) {
           <Typography variant="h5" fontWeight={600} color={colors.grey[100]}>
             {day}
           </Typography>
+          <Typography variant="overline" color={colors.grey[500]}>
+            Menu
+          </Typography>
         </Box>
         {mealLabels.map((meal, index) => (
           <Box key={meal}>
@@ -95,21 +111,33 @@ function DayCard({ day, meals, colors, onConfirm }) {
                 <Box key={entry.id} sx={{ mt: 0.75 }}>
                   <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>
                     {entry.name}
-                    {entry.status !== 'planned' && ` · ${entry.status.replaceAll('_', ' ')}`}
                   </Typography>
-                  {entry.status === 'planned' && (
+                  {entry.status !== 'planned' ? (
+                    <Chip
+                      size="small"
+                      color={statusColor(entry.status)}
+                      label={planStatusLabel(entry.status)}
+                      sx={{ mt: 0.5, fontWeight: 700 }}
+                    />
+                  ) : (
                     <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.5 }}>
-                      {[
-                        ['yes', 'Cooked'],
-                        ['no', 'Skipped'],
-                        ['other', 'Other'],
-                      ].map(([response, label]) => (
+                      {(['Kids Tiffin', 'Lunch', 'Dinner'].includes(meal)
+                        ? [['no', 'Skipped']]
+                        : [['yes', 'Cooked'], ['no', 'Skipped'], ['other', 'Other']]
+                      ).map(([response, label]) => (
                         <Button
                           key={response}
                           size="small"
-                          color="inherit"
+                          variant={response === 'yes' ? 'contained' : 'outlined'}
+                          color={response === 'yes' ? 'success' : response === 'no' ? 'error' : 'info'}
                           onClick={() => onConfirm(entry.id, response)}
-                          sx={{ minWidth: 0, px: 0.75, textTransform: 'none' }}
+                          sx={{
+                            minWidth: 0,
+                            px: 1,
+                            fontWeight: 700,
+                            textTransform: 'none',
+                            ...(response === 'no' ? { borderWidth: 1.5 } : {}),
+                          }}
                         >
                           {label}
                         </Button>
@@ -122,6 +150,23 @@ function DayCard({ day, meals, colors, onConfirm }) {
                   No recipe planned
                 </Typography>
               )}
+              {meal === 'Dinner' && dalSuggestion && (
+                <Box sx={{ mt: 1, p: 1, borderRadius: 1, bgcolor: 'action.hover' }}>
+                  <Typography variant="body2">
+                    Dal side suggestion: <strong>{dalSuggestion.name}</strong>
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" display="block">
+                    Serve with {pairedVegetable || 'a vegetable dish'}.
+                  </Typography>
+                  <Button
+                    size="small"
+                    onClick={() => onPlanDal(dalSuggestion.recipeId, dalSuggestion.mealDate)}
+                    sx={{ mt: 0.5, px: 0, textTransform: 'none' }}
+                  >
+                    Add dal side to plan
+                  </Button>
+                </Box>
+              )}
             </Box>
           </Box>
         ))}
@@ -131,9 +176,10 @@ function DayCard({ day, meals, colors, onConfirm }) {
 }
 
 export default function RecipePlannerPage() {
-  const { user, logout } = useAuth();
+  const location = useLocation();
   const theme = useTheme();
   const colors = tokens(theme.palette.mode);
+  const isSettingsPage = location.pathname === '/settings';
   const weekStart = useMemo(() => getMonday(new Date()), []);
   const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -158,7 +204,10 @@ export default function RecipePlannerPage() {
   }, [receiptPhoto]);
 
   const fetchDashboard = useCallback(async () => {
-    const { data } = await api.get(`/food?weekStart=${encodeURIComponent(weekStart)}`);
+    const today = localDate(new Date());
+    const { data } = await api.get(
+      `/food?weekStart=${encodeURIComponent(weekStart)}&today=${encodeURIComponent(today)}`,
+    );
     return data;
   }, [weekStart]);
 
@@ -267,13 +316,26 @@ export default function RecipePlannerPage() {
   const confirmMeal = async (planId, response) => {
     setSaving(true);
     try {
-      const { data } = await api.post(`/food/plan/${planId}/confirm`, { response });
+      await api.post(`/food/plan/${planId}/confirm`, { response });
       await refreshDashboard();
-      if (data.missingInventory?.length) {
-        setPageError(`Meal marked cooked, but no available lot was found for: ${data.missingInventory.join(', ')}.`);
-      }
     } catch (error) {
       setPageError(error.message || 'Could not save the meal confirmation.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const planDalSide = async (suggestedRecipeId, mealDate) => {
+    setSaving(true);
+    try {
+      await api.post('/food/plan', {
+        recipeId: suggestedRecipeId,
+        mealDate,
+        mealSlot: 'dinner',
+      });
+      await refreshDashboard();
+    } catch (error) {
+      setPageError(error.message || 'Could not add the dal side to the plan.');
     } finally {
       setSaving(false);
     }
@@ -302,24 +364,28 @@ export default function RecipePlannerPage() {
     return meals;
   };
 
+  const dalSuggestionFor = (date) => {
+    if (dashboard?.plan.some((entry) => (
+      entry.meal_date === date && entry.meal_type === 'dal_side' && entry.meal_slot === 'dinner'
+    ))) {
+      return null;
+    }
+    return dashboard?.dalSuggestions.find((suggestion) => suggestion.mealDate === date) || null;
+  };
+
+  const pairedVegetableFor = (date) => {
+    const plannedVegetable = dashboard?.plan.find((entry) => (
+      entry.meal_date === date
+      && entry.meal_slot === 'dinner'
+      && entry.meal_type !== 'dal_side'
+    ));
+    if (plannedVegetable) return plannedVegetable.recipe_name;
+    return recommendations.find((recipe) => recipe.suitableForAdultDinner)?.name || '';
+  };
+
   return (
     <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
-      <AppBar position="sticky">
-        <Toolbar sx={{ justifyContent: 'space-between', gap: 1 }}>
-          <Typography variant="h6" sx={{ flexGrow: 1 }}>Food App</Typography>
-          <IconButton
-            aria-label="Add recipe or receipt"
-            aria-controls={addMenuAnchor ? 'add-menu' : undefined}
-            aria-haspopup="menu"
-            aria-expanded={Boolean(addMenuAnchor)}
-            onClick={(event) => setAddMenuAnchor(event.currentTarget)}
-            sx={{ bgcolor: 'secondary.main', color: '#102018', '&:hover': { bgcolor: '#3da58a' } }}
-          >
-            <AddIcon />
-          </IconButton>
-          <Button color="inherit" onClick={logout}>Sign out</Button>
-        </Toolbar>
-      </AppBar>
+      <PlannerTopbar />
 
       <Menu id="add-menu" anchorEl={addMenuAnchor} open={Boolean(addMenuAnchor)} onClose={closeAddMenu}>
         <MenuItem onClick={() => {
@@ -335,6 +401,14 @@ export default function RecipePlannerPage() {
         }}>
           Add fresh vegetables to grocery list
         </MenuItem>
+        {dashboard?.groceryStage.length > 0 && (
+          <MenuItem onClick={() => {
+            closeAddMenu();
+            openPurchaseDialog();
+          }}>
+            Confirm purchased vegetables
+          </MenuItem>
+        )}
         <MenuItem onClick={() => {
           closeAddMenu();
           photoInputRef.current?.click();
@@ -352,89 +426,28 @@ export default function RecipePlannerPage() {
         onChange={chooseReceiptPhoto}
       />
 
-      <Box sx={{ maxWidth: 1200, mx: 'auto', p: { xs: 2, sm: 3 } }}>
-        <Typography variant="h4" gutterBottom>Weekly meal plan</Typography>
-        <Typography color="text.secondary" sx={{ mb: 2 }}>
-          Signed in as {user?.email}. Meals and fresh-produce lots are saved in the household database.
-        </Typography>
+      <Box sx={{ maxWidth: 1200, mx: 'auto', px: { xs: 2, sm: 3 }, pt: 9, pb: 12 }}>
         {pageError && <Alert severity="error" onClose={() => setPageError('')} sx={{ mb: 2 }}>{pageError}</Alert>}
         {loading && <CircularProgress size={24} sx={{ mb: 2 }} />}
-
-        <Box sx={{ mb: 3 }}>
-          <Typography variant="h6" gutterBottom>Fresh vegetables on hand</Typography>
-          {dashboard?.inventory.length ? (
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-              {dashboard.inventory.map((lot) => (
-                <Typography
-                  key={lot.id}
-                  variant="body2"
-                  sx={{ px: 1.25, py: 0.75, borderRadius: 1, bgcolor: 'action.hover' }}
-                >
-                  {lot.item_name} · bought {lot.purchase_date}{lot.store ? ` at ${lot.store}` : ''}
-                </Typography>
-              ))}
-            </Box>
-          ) : (
-            <Typography color="text.secondary">No fresh vegetables are currently marked available.</Typography>
-          )}
-          {!!dashboard?.groceryStage.length && (
-            <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1, mt: 1.5 }}>
-              <Typography variant="body2">
-                Grocery list: {dashboard.groceryStage.map((item) => item.item_name).join(', ')}
-              </Typography>
-              <Button size="small" variant="outlined" onClick={openPurchaseDialog}>
-                Confirm purchases
-              </Button>
-            </Box>
-          )}
-        </Box>
-
-        <Box sx={{ mb: 3 }}>
-          <Typography variant="h6" gutterBottom>Approved recipes that fit current inventory</Typography>
-          {recommendations.length ? recommendations.map((recipe) => (
-            <Box
-              key={recipe.id}
-              sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1, mb: 0.75 }}
-            >
-              <Typography variant="body2">
-                <strong>{recipe.name}</strong>
-                {' · uses '}
-                {recipe.requiredFresh.map((item) => `${item.name} (${item.freshness.toLowerCase()})`).join(', ')}
-                {recipe.optionalAvailable.length > 0 && ` · optional: ${recipe.optionalAvailable.join(', ')}`}
-              </Typography>
-              <Button size="small" onClick={() => openRecipeDialog(recipe.id)}>Plan</Button>
-            </Box>
-          )) : (
-            <Typography color="text.secondary">
-              No approved recipes currently match available fresh vegetables.
-            </Typography>
-          )}
-        </Box>
-
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-          <Button variant="outlined" onClick={() => setGroceryDialogOpen(true)}>
-            Add vegetables to grocery list
-          </Button>
-          <Button variant="outlined" onClick={openRecipeDialog} disabled={!recommendations.length}>
-            Add recipe to plan
-          </Button>
-        </Box>
-        <Grid container spacing={2}>
-          {WEEKDAYS.map((day, index) => (
-            <Grid key={day} size={{ xs: 12, sm: 6, lg: 4 }}>
-              <DayCard
-                day={day}
-                meals={cardMeals(offsetDate(weekStart, index))}
-                colors={colors}
-                onConfirm={confirmMeal}
-              />
-            </Grid>
-          ))}
-        </Grid>
-
-        <Box sx={{ mt: 4 }}>
-          <PushNotificationSettings />
-        </Box>
+        {isSettingsPage ? (
+          <PlannerSettingsPage />
+        ) : (
+          <Grid container spacing={2}>
+            {WEEKDAYS.map((day, index) => (
+              <Grid key={day} size={{ xs: 12, sm: 6, lg: 4 }}>
+                <DayCard
+                  day={day}
+                  meals={cardMeals(offsetDate(weekStart, index))}
+                  dalSuggestion={dalSuggestionFor(offsetDate(weekStart, index))}
+                  pairedVegetable={pairedVegetableFor(offsetDate(weekStart, index))}
+                  colors={colors}
+                  onConfirm={confirmMeal}
+                  onPlanDal={planDalSide}
+                />
+              </Grid>
+            ))}
+          </Grid>
+        )}
       </Box>
 
       <Dialog open={recipeDialogOpen} onClose={() => setRecipeDialogOpen(false)} fullWidth maxWidth="xs">
@@ -592,6 +605,7 @@ export default function RecipePlannerPage() {
           <Button onClick={() => setReceiptPhoto(null)}>Close</Button>
         </DialogActions>
       </Dialog>
+      <BottomNav onAddClick={(event) => setAddMenuAnchor(event.currentTarget)} />
     </Box>
   );
 }

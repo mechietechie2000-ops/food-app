@@ -1,8 +1,11 @@
 const express = require('express');
 
 const WEEK_DAYS = 7;
+const DAY_MILLISECONDS = 86400000;
+const DAL_INTERVAL_DAYS = 2;
 const FRESHNESS_SOON_DAYS = 2;
 const MEAL_SLOTS = new Set(['kids_tiffin', 'adult_tiffin', 'dinner', 'weekend_lunch']);
+const AUTO_COOK_MEAL_SLOTS = ['kids_tiffin', 'dinner', 'weekend_lunch'];
 
 function isDate(value) {
   return typeof value === 'string'
@@ -22,6 +25,82 @@ function integerList(values) {
     && values.length > 0
     && values.every((value) => Number.isSafeInteger(value) && value > 0)
     && new Set(values).size === values.length;
+}
+
+function getDalSuggestions(database, weekStart) {
+  const dalSides = database.prepare(`
+    SELECT id, name
+    FROM recipe
+    WHERE approved = 1 AND meal_type = 'dal_side'
+    ORDER BY id
+  `).all();
+  if (dalSides.length === 0) return [];
+
+  const firstDay = Math.floor(Date.parse(`${weekStart}T00:00:00Z`) / DAY_MILLISECONDS);
+  return Array.from({ length: WEEK_DAYS }, (_, offset) => firstDay + offset)
+    .filter((day) => day % DAL_INTERVAL_DAYS === 0)
+    .map((day) => {
+      const date = dateOffset(weekStart, day - firstDay);
+      const dalIndex = Math.floor(day / DAL_INTERVAL_DAYS) % dalSides.length;
+      return {
+        mealDate: date,
+        recipeId: dalSides[dalIndex].id,
+        name: dalSides[dalIndex].name,
+      };
+    });
+}
+
+function confirmCookedPlan(database, plan) {
+  const updated = database.prepare(`
+    UPDATE weekly_meal_plan
+    SET status = 'confirmed_cooked'
+    WHERE id = ? AND status = 'planned'
+  `).run(plan.id);
+  if (updated.changes !== 1) return;
+
+  database.prepare(`
+    INSERT INTO meal_confirmation_log
+      (plan_id, recipe_id, cooked_date, user_response, source, notes)
+    VALUES (?, ?, ?, 'yes', 'manual', ?)
+  `).run(plan.id, plan.recipe_id, plan.meal_date, 'Assumed cooked: no skip was recorded.');
+
+  const requiredFresh = database.prepare(`
+    SELECT i.id
+    FROM recipe_item ri
+    JOIN item i ON i.id = ri.item_id
+    WHERE ri.recipe_id = ? AND ri.role = 'REQUIRED'
+      AND i.inventory_type = 'FRESH'
+  `).all(plan.recipe_id);
+  const findOldestLot = database.prepare(`
+    SELECT id
+    FROM inventory
+    WHERE item_id = ? AND status = 'AVAILABLE'
+    ORDER BY purchase_date, id
+    LIMIT 1
+  `);
+  const markUsed = database.prepare(`
+    UPDATE inventory SET status = 'USED', used_date = ?
+    WHERE id = ? AND status = 'AVAILABLE'
+  `);
+  requiredFresh.forEach((item) => {
+    const lot = findOldestLot.get(item.id);
+    if (lot) markUsed.run(plan.meal_date, lot.id);
+  });
+}
+
+function finalizePastMeals(database, today) {
+  const confirmPastMeals = database.transaction(() => {
+    const pendingPlans = database.prepare(`
+      SELECT id, recipe_id, meal_date
+      FROM weekly_meal_plan
+      WHERE status = 'planned'
+        AND meal_date < ?
+        AND meal_slot IN (${AUTO_COOK_MEAL_SLOTS.map(() => '?').join(', ')})
+      ORDER BY meal_date, id
+    `).all(today, ...AUTO_COOK_MEAL_SLOTS);
+    pendingPlans.forEach((plan) => confirmCookedPlan(database, plan));
+  });
+  confirmPastMeals();
 }
 
 function createFoodRouter(database) {
@@ -150,8 +229,9 @@ function createFoodRouter(database) {
         ORDER BY name
       `).all(),
       recommendations: getRecommendations(),
+      dalSuggestions: getDalSuggestions(database, weekStart),
       plan: database.prepare(`
-        SELECT p.id, p.recipe_id, r.name AS recipe_name, r.description,
+        SELECT p.id, p.recipe_id, r.name AS recipe_name, r.description, r.meal_type,
                p.meal_date, p.meal_slot, p.status
         FROM weekly_meal_plan p
         JOIN recipe r ON r.id = p.recipe_id
@@ -163,12 +243,15 @@ function createFoodRouter(database) {
 
   function eligibleRecipe(recipeId, mealSlot) {
     const recipe = database.prepare(`
-      SELECT id, suitable_for_kids_tiffin, suitable_for_adult_tiffin,
+      SELECT id, meal_type, suitable_for_kids_tiffin, suitable_for_adult_tiffin,
              suitable_for_adult_dinner
       FROM recipe
       WHERE id = ? AND approved = 1
     `).get(recipeId);
     if (!recipe) return false;
+    if (recipe.meal_type === 'dal_side') {
+      return mealSlot === 'dinner' && Boolean(recipe.suitable_for_adult_dinner);
+    }
     if (mealSlot === 'kids_tiffin' && !recipe.suitable_for_kids_tiffin) return false;
     if (mealSlot === 'adult_tiffin' && !recipe.suitable_for_adult_tiffin) return false;
     if (mealSlot === 'dinner' && !recipe.suitable_for_adult_dinner) return false;
@@ -177,9 +260,11 @@ function createFoodRouter(database) {
 
   router.get('/', (req, res) => {
     const weekStart = req.query.weekStart;
-    if (!isDate(weekStart)) {
+    const today = req.query.today;
+    if (!isDate(weekStart) || !isDate(today)) {
       return res.status(400).json({ error: 'A valid weekStart date is required.' });
     }
+    finalizePastMeals(database, today);
     return res.json(getDashboard(weekStart));
   });
 
@@ -275,16 +360,19 @@ function createFoodRouter(database) {
     const planId = Number(req.params.id);
     const { response } = req.body;
     if (!Number.isSafeInteger(planId) || planId < 1 || !['yes', 'no', 'other'].includes(response)) {
-      return res.status(400).json({ error: 'A valid plan and cooked response are required.' });
+      return res.status(400).json({ error: 'A valid plan and response are required.' });
     }
 
     const confirmMeal = database.transaction(() => {
       const plan = database.prepare(`
-        SELECT id, recipe_id, meal_date, status
+        SELECT id, recipe_id, meal_date, meal_slot, status
         FROM weekly_meal_plan
         WHERE id = ?
       `).get(planId);
       if (!plan || plan.status !== 'planned') {
+        return null;
+      }
+      if (AUTO_COOK_MEAL_SLOTS.includes(plan.meal_slot) && response !== 'no') {
         return null;
       }
 
@@ -337,7 +425,7 @@ function createFoodRouter(database) {
 
     const result = confirmMeal();
     if (!result) {
-      return res.status(409).json({ error: 'This meal is no longer awaiting confirmation.' });
+      return res.status(409).json({ error: 'This meal is no longer awaiting confirmation or cannot be manually confirmed.' });
     }
     return res.json(result);
   });

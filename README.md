@@ -27,8 +27,13 @@ On API startup, the final household schema in
 in `backend/food-app-sample-data.sql` is loaded into the same SQLite database.
 Fresh vegetable purchases are stored as separate inventory lots; pantry staples
 are always available and are not tracked as inventory. Grocery entry and
-purchase confirmation are manual. Receipt photos are preview-only; receipt
-parsing is not implemented.
+purchase confirmation are manual. Dal sides rotate through Moong, Toor, Masoor,
+Rajma, Chana Masala, and Black Beans on alternate dinner days; they are separate
+plan entries from the vegetable dish and are not inventory-tracked. Receipt
+photos are preview-only; receipt parsing is not implemented. For kids tiffin,
+lunch, and dinner, mark a plan **Skipped** when it was not eaten; an unskipped
+plan is assumed cooked after its date passes and required fresh inventory is
+updated then. Adult tiffin keeps its separate manual confirmation.
 
 ## Test on a phone
 

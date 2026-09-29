@@ -18,6 +18,10 @@ VALUES
     ('Rice', 'staple', 'STAPLE', 1, 365, 1),
     ('Toor Dal', 'dal', 'STAPLE', 1, 365, 1),
     ('Moong Dal', 'dal', 'STAPLE', 1, 365, 1),
+    ('Masoor Dal', 'dal', 'STAPLE', 1, 365, 1),
+    ('Rajma', 'dal', 'STAPLE', 1, 365, 1),
+    ('Chana Masala', 'dal', 'STAPLE', 1, 365, 1),
+    ('Black Beans', 'dal', 'STAPLE', 1, 365, 1),
     ('Wheat Flour', 'staple', 'STAPLE', 1, 90, 1),
     ('Oil', 'staple', 'STAPLE', 1, 365, 1),
     ('Salt', 'spice', 'STAPLE', 1, 365, 1),
@@ -61,7 +65,19 @@ VALUES
      'Indian', 'dal', 1, 1, 0, 1, 1, 21),
     ('Mixed Vegetable', 'A flexible vegetable curry using the fresh vegetables on hand.',
      'Cook the required carrot with any available optional vegetables, onion, tomato and spices until tender.',
-     'Indian', 'sabzi', 1, 1, 0, 1, 1, 21);
+     'Indian', 'sabzi', 1, 1, 0, 1, 1, 21),
+    ('Moong Dal', 'Family dal served alongside a vegetable dish.',
+     NULL, 'Indian', 'dal_side', 1, 0, 0, 1, 1, 21),
+    ('Toor Dal', 'Family dal served alongside a vegetable dish.',
+     NULL, 'Indian', 'dal_side', 1, 0, 0, 1, 1, 21),
+    ('Masoor Dal', 'Family dal served alongside a vegetable dish.',
+     NULL, 'Indian', 'dal_side', 1, 0, 0, 1, 1, 21),
+    ('Rajma', 'Family dal served alongside a vegetable dish.',
+     NULL, 'Indian', 'dal_side', 1, 0, 0, 1, 1, 21),
+    ('Chana Masala', 'Family dal served alongside a vegetable dish.',
+     NULL, 'Indian', 'dal_side', 1, 0, 0, 1, 1, 21),
+    ('Black Beans', 'Family dal served alongside a vegetable dish.',
+     NULL, 'Indian', 'dal_side', 1, 0, 0, 1, 1, 21);
 
 INSERT OR IGNORE INTO recipe_item (recipe_id, item_id, role)
 SELECT r.id, i.id, x.role
@@ -91,6 +107,12 @@ FROM (
     UNION ALL SELECT 'Mixed Vegetable', 'Cauliflower', 'OPTIONAL'
     UNION ALL SELECT 'Mixed Vegetable', 'Peas', 'OPTIONAL'
     UNION ALL SELECT 'Mixed Vegetable', 'Potato', 'OPTIONAL'
+    UNION ALL SELECT 'Moong Dal', 'Moong Dal', 'REQUIRED'
+    UNION ALL SELECT 'Toor Dal', 'Toor Dal', 'REQUIRED'
+    UNION ALL SELECT 'Masoor Dal', 'Masoor Dal', 'REQUIRED'
+    UNION ALL SELECT 'Rajma', 'Rajma', 'REQUIRED'
+    UNION ALL SELECT 'Chana Masala', 'Chana Masala', 'REQUIRED'
+    UNION ALL SELECT 'Black Beans', 'Black Beans', 'REQUIRED'
 ) AS x
 JOIN recipe r ON r.name = x.recipe
 JOIN item i ON i.name = x.item;

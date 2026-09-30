@@ -1,0 +1,14 @@
+{
+  "default_cooldown_days": 21,
+  "repeat_avoidance_lookback_days": 14,
+  "push_retry_hours": 3,
+  "catchup_lookback_days": 7,
+  "no_onion_garlic_item_names": ["Onion", "Garlic"],
+  "schedule": {
+    "tick_seconds": 60,
+    "weekly_generation_enabled": true,
+    "weekly_generation_time": "18:00",
+    "evening_confirmation_time": "19:30",
+    "soak_warning_time": "20:00"
+  }
+}

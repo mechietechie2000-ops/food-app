@@ -18,6 +18,7 @@ import {
   IconButton,
   Menu,
   MenuItem,
+  Snackbar,
   TextField,
   Typography,
   useTheme,
@@ -28,9 +29,12 @@ import RestaurantMenuOutlinedIcon from '@mui/icons-material/RestaurantMenuOutlin
 import { useLocation } from 'react-router-dom';
 import { tokens } from '../theme';
 import { api } from '../services/api';
-import BottomNav from '../scenes/global/BottomNav';
+import BottomNav, { BOTTOM_NAV_HEIGHT } from '../scenes/global/BottomNav';
 import PlannerSettingsPage from './PlannerSettingsPage';
 import PlannerTopbar from './PlannerTopbar';
+import InventoryPage from './InventoryPage';
+import CatchUpDialog from './CatchUpDialog';
+import AttentionCard from './AttentionCard';
 
 const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const MEALS = ['Kids Tiffin', 'Lunch', 'Dinner'];
@@ -39,6 +43,8 @@ const MEAL_SLOTS = [
   { label: 'Adult Tiffin', value: 'adult_tiffin' },
   { label: 'Lunch', value: 'weekend_lunch' },
   { label: 'Dinner', value: 'dinner' },
+  { label: 'Sides', value: 'sides' }, 
+  { label: 'Guest Special', value: 'guest_special' },
 ];
 
 function localDate(date) {
@@ -96,15 +102,15 @@ function DayCard({ day, meals, dalSuggestion, pairedVegetable, colors, onConfirm
           <Typography variant="h5" fontWeight={600} color={colors.grey[100]}>
             {day}
           </Typography>
-          <Typography variant="overline" color={colors.grey[500]}>
+          {/* <Typography variant="overline" color={colors.grey[500]}>
             Menu
-          </Typography>
+          </Typography> */}
         </Box>
         {mealLabels.map((meal, index) => (
           <Box key={meal}>
             {index > 0 && <Divider sx={{ borderColor: colors.primary[500] }} />}
             <Box sx={{ py: 1.25 }}>
-              <Typography variant="subtitle2" fontWeight={700} color={colors.greenAccent[500]}>
+              <Typography variant="h5" fontWeight={700} color={colors.greenAccent[500]}>
                 {meal}
               </Typography>
               {meals[meal].length > 0 ? meals[meal].map((entry) => (
@@ -151,7 +157,7 @@ function DayCard({ day, meals, dalSuggestion, pairedVegetable, colors, onConfirm
                 </Typography>
               )}
               {meal === 'Dinner' && dalSuggestion && (
-                <Box sx={{ mt: 1, p: 1, borderRadius: 1, bgcolor: 'action.hover' }}>
+                <Box sx={{ mt: 1, p: 1, borderRadius: 2, bgcolor: 'action.hover' }}>
                   <Typography variant="body2">
                     Dal side suggestion: <strong>{dalSuggestion.name}</strong>
                   </Typography>
@@ -179,7 +185,7 @@ export default function RecipePlannerPage() {
   const location = useLocation();
   const theme = useTheme();
   const colors = tokens(theme.palette.mode);
-  const isSettingsPage = location.pathname === '/settings';
+  const view = location.pathname === '/settings' ? 'settings' : location.pathname === '/inventory' ? 'inventory' : 'home';
   const weekStart = useMemo(() => getMonday(new Date()), []);
   const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -197,6 +203,9 @@ export default function RecipePlannerPage() {
   const [purchaseDate, setPurchaseDate] = useState(localDate(new Date()));
   const [store, setStore] = useState('');
   const [receiptPhoto, setReceiptPhoto] = useState(null);
+  const [notice, setNotice] = useState('');
+  // 'auto' opens the catch-up prompt on app open; 'closed' after Later/Save.
+  const [catchUpMode, setCatchUpMode] = useState('auto');
   const photoInputRef = useRef(null);
 
   useEffect(() => () => {
@@ -244,6 +253,20 @@ export default function RecipePlannerPage() {
   }, [fetchDashboard]);
 
   const closeAddMenu = () => setAddMenuAnchor(null);
+  const pendingPurchaseCount = dashboard?.groceryStage.length ?? 0;
+  const unconfirmedMeals = dashboard?.unconfirmed || [];
+  const catchUpOpen = view === 'home'
+    && unconfirmedMeals.length > 0
+    && (catchUpMode === 'open' || catchUpMode === 'auto');
+
+  // Mirror "needs attention" on the installed app's home-screen icon where the
+  // browser supports it (a no-op elsewhere).
+  const attentionCount = pendingPurchaseCount + unconfirmedMeals.length;
+  useEffect(() => {
+    if (!dashboard || !('setAppBadge' in navigator)) return;
+    const update = attentionCount > 0 ? navigator.setAppBadge(attentionCount) : navigator.clearAppBadge();
+    update?.catch(() => {});
+  }, [dashboard, attentionCount]);
   const recommendations = dashboard?.recommendations || [];
   const selectedRecipes = recommendations.filter((recipe) => {
     if (recipeMeal === 'kids_tiffin') return recipe.suitableForKidsTiffin;
@@ -325,6 +348,34 @@ export default function RecipePlannerPage() {
     }
   };
 
+  const submitCatchUp = async (responses) => {
+    setSaving(true);
+    try {
+      await api.post('/food/catchup', { responses });
+      setCatchUpMode('closed');
+      await refreshDashboard();
+    } catch (error) {
+      setPageError(error.message || 'Could not save the catch-up answers.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const generatePlan = async () => {
+    const { data } = await api.post('/food/plan/generate', { weekStart, today: localDate(new Date()) });
+    await refreshDashboard();
+    return data;
+  };
+
+  // The Confirm icon only has work to do while groceries are waiting.
+  const handleConfirmClick = () => {
+    if (pendingPurchaseCount === 0) {
+      setNotice('Nothing is waiting to be confirmed. Add vegetables to the grocery list first.');
+      return;
+    }
+    openPurchaseDialog();
+  };
+
   const planDalSide = async (suggestedRecipeId, mealDate) => {
     setSaving(true);
     try {
@@ -357,7 +408,7 @@ export default function RecipePlannerPage() {
         if (!meals[label]) meals[label] = [];
         meals[label].push({
           id: entry.id,
-          name: entry.recipe_name,
+          name: entry.tiffin_kid_slot ? `${entry.recipe_name} (${entry.tiffin_kid_slot})` : entry.recipe_name,
           status: entry.status,
         });
       });
@@ -397,20 +448,6 @@ export default function RecipePlannerPage() {
         </MenuItem>
         <MenuItem onClick={() => {
           closeAddMenu();
-          setGroceryDialogOpen(true);
-        }}>
-          Add fresh vegetables to grocery list
-        </MenuItem>
-        {dashboard?.groceryStage.length > 0 && (
-          <MenuItem onClick={() => {
-            closeAddMenu();
-            openPurchaseDialog();
-          }}>
-            Confirm purchased vegetables
-          </MenuItem>
-        )}
-        <MenuItem onClick={() => {
-          closeAddMenu();
           photoInputRef.current?.click();
         }}>
           <ReceiptLongOutlinedIcon fontSize="small" sx={{ mr: 1.5 }} />
@@ -429,9 +466,18 @@ export default function RecipePlannerPage() {
       <Box sx={{ maxWidth: 1200, mx: 'auto', px: { xs: 2, sm: 3 }, pt: 9, pb: 12 }}>
         {pageError && <Alert severity="error" onClose={() => setPageError('')} sx={{ mb: 2 }}>{pageError}</Alert>}
         {loading && <CircularProgress size={24} sx={{ mb: 2 }} />}
-        {isSettingsPage ? (
-          <PlannerSettingsPage />
-        ) : (
+        {view === 'settings' && <PlannerSettingsPage onGeneratePlan={generatePlan} />}
+        {view === 'inventory' && <InventoryPage />}
+        {view === 'home' && (
+          <AttentionCard
+            unconfirmed={unconfirmedMeals}
+            lookbackDays={dashboard?.catchupLookbackDays}
+            pendingPurchaseCount={pendingPurchaseCount}
+            onReview={() => setCatchUpMode('open')}
+            onConfirmPurchases={openPurchaseDialog}
+          />
+        )}
+        {view === 'home' && (
           <Grid container spacing={2}>
             {WEEKDAYS.map((day, index) => (
               <Grid key={day} size={{ xs: 12, sm: 6, lg: 4 }}>
@@ -605,7 +651,29 @@ export default function RecipePlannerPage() {
           <Button onClick={() => setReceiptPhoto(null)}>Close</Button>
         </DialogActions>
       </Dialog>
-      <BottomNav onAddClick={(event) => setAddMenuAnchor(event.currentTarget)} />
+      {catchUpOpen && (
+        <CatchUpDialog
+          meals={unconfirmedMeals}
+          saving={saving}
+          onClose={() => setCatchUpMode('closed')}
+          onSubmit={submitCatchUp}
+        />
+      )}
+      <Snackbar
+        open={Boolean(notice)}
+        autoHideDuration={4000}
+        onClose={() => setNotice('')}
+        message={notice}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        sx={{ mb: `calc(${BOTTOM_NAV_HEIGHT}px + env(safe-area-inset-bottom))` }}
+      />
+      <BottomNav
+        onAddClick={(event) => setAddMenuAnchor(event.currentTarget)}
+        onGroceriesClick={() => setGroceryDialogOpen(true)}
+        onConfirmClick={handleConfirmClick}
+        pendingPurchaseCount={pendingPurchaseCount}
+        unconfirmedMealCount={unconfirmedMeals.length}
+      />
     </Box>
   );
 }

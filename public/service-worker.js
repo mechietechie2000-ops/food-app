@@ -91,6 +91,10 @@ self.addEventListener('push', (event) => {
     body: data.body || 'You have a new notification.',
     icon: '/food-app-icon-192.png',
     badge: '/food-app-icon-192.png',
+    // A retry push reuses the tag, so it replaces the first notification
+    // (and alerts again) instead of stacking a duplicate.
+    tag: data.tag || undefined,
+    renotify: Boolean(data.tag),
     data: { url: data.url || '/' },
   }));
 });

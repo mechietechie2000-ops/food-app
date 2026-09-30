@@ -35,6 +35,43 @@ lunch, and dinner, mark a plan **Skipped** when it was not eaten; an unskipped
 plan is assumed cooked after its date passes and required fresh inventory is
 updated then. Adult tiffin keeps its separate manual confirmation.
 
+## Weekly plan, reminders and catch-up
+
+The API process runs a small scheduler (checked every minute, server local
+time). Times and thresholds live in `backend/config/rules.json`:
+
+| What | When | Notes |
+| --- | --- | --- |
+| Weekly plan generation | Sunday 18:00, for the week ahead | Fills only **empty** slots; a manual plan row is never changed. The current week is also checked, so a missed run is made up for. Turn off with `weekly_generation_enabled`. |
+| Evening confirmation push | 19:30 daily | One push listing today's unanswered meals; sets `notified_at`. |
+| Soak/marination warning | 20:00 daily | Only if tomorrow's planned recipe has `requires_soak_marination = 1`. |
+| Retry push | `push_retry_hours` (3) after `notified_at` | One retry per row; `retry_sent_at` stops a second one. |
+
+Every scheduled run is recorded in `scheduler_run_log`, so restarting the
+server never resends a push or regenerates a week twice. If nobody is
+subscribed to push, `notified_at` is left empty and the in-app backstops below
+still apply.
+
+The app itself is the backstop when a push is lost: meals still unanswered
+within `catchup_lookback_days` (7) show on the Home screen as a "needs your
+attention" banner, a catch-up dialog opens on app open (Cooked / Skipped /
+Away per meal), and the Home and Confirm icons in the bottom bar carry badges.
+**Away** also writes an `away_log` row so the planner ignores that day.
+
+Plan generation (`backend/services/mealPlanner.js`, `decideMeal()`) applies the
+spec's pipeline: required inventory (one lot is never promised to two meals),
+cooldown, festival and dietary days, weekend non-veg/frozen preference, slot
+rules, repeat avoidance, then soonest-expiring produce first. Tiffin slots come
+from the `tiffin_schedule` table; the seeded default is Mon/Tue adult, Wed/Fri
+kids, other days none. Change a row's `tiffin_type` to change the pattern.
+Menu → **Generate this week** runs the same generator on demand.
+
+Run the backend tests (in-memory database, no network) with:
+
+```sh
+npm --prefix backend test
+```
+
 ## Test on a phone
 
 For phone/PWA testing, use the bundled app instead of the development server;

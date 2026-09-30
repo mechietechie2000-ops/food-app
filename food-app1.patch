@@ -1,0 +1,2411 @@
+diff --git a/README.md b/README.md
+index f79454b..1452cd4 100644
+--- a/README.md
++++ b/README.md
+@@ -35,6 +35,43 @@ lunch, and dinner, mark a plan **Skipped** when it was not eaten; an unskipped
+ plan is assumed cooked after its date passes and required fresh inventory is
+ updated then. Adult tiffin keeps its separate manual confirmation.
+ 
++## Weekly plan, reminders and catch-up
++
++The API process runs a small scheduler (checked every minute, server local
++time). Times and thresholds live in `backend/config/rules.json`:
++
++| What | When | Notes |
++| --- | --- | --- |
++| Weekly plan generation | Sunday 18:00, for the week ahead | Fills only **empty** slots; a manual plan row is never changed. The current week is also checked, so a missed run is made up for. Turn off with `weekly_generation_enabled`. |
++| Evening confirmation push | 19:30 daily | One push listing today's unanswered meals; sets `notified_at`. |
++| Soak/marination warning | 20:00 daily | Only if tomorrow's planned recipe has `requires_soak_marination = 1`. |
++| Retry push | `push_retry_hours` (3) after `notified_at` | One retry per row; `retry_sent_at` stops a second one. |
++
++Every scheduled run is recorded in `scheduler_run_log`, so restarting the
++server never resends a push or regenerates a week twice. If nobody is
++subscribed to push, `notified_at` is left empty and the in-app backstops below
++still apply.
++
++The app itself is the backstop when a push is lost: meals still unanswered
++within `catchup_lookback_days` (7) show on the Home screen as a "needs your
++attention" banner, a catch-up dialog opens on app open (Cooked / Skipped /
++Away per meal), and the Home and Confirm icons in the bottom bar carry badges.
++**Away** also writes an `away_log` row so the planner ignores that day.
++
++Plan generation (`backend/services/mealPlanner.js`, `decideMeal()`) applies the
++spec's pipeline: required inventory (one lot is never promised to two meals),
++cooldown, festival and dietary days, weekend non-veg/frozen preference, slot
++rules, repeat avoidance, then soonest-expiring produce first. Tiffin slots come
++from the `tiffin_schedule` table; the seeded default is Mon/Tue adult, Wed/Fri
++kids, other days none. Change a row's `tiffin_type` to change the pattern.
++Menu → **Generate this week** runs the same generator on demand.
++
++Run the backend tests (in-memory database, no network) with:
++
++```sh
++npm --prefix backend test
++```
++
+ ## Test on a phone
+ 
+ For phone/PWA testing, use the bundled app instead of the development server;
+diff --git a/backend/config/rules.json b/backend/config/rules.json
+new file mode 100644
+index 0000000..85cbcaf
+--- /dev/null
++++ b/backend/config/rules.json
+@@ -0,0 +1,14 @@
++{
++  "default_cooldown_days": 21,
++  "repeat_avoidance_lookback_days": 14,
++  "push_retry_hours": 3,
++  "catchup_lookback_days": 7,
++  "no_onion_garlic_item_names": ["Onion", "Garlic"],
++  "schedule": {
++    "tick_seconds": 60,
++    "weekly_generation_enabled": true,
++    "weekly_generation_time": "18:00",
++    "evening_confirmation_time": "19:30",
++    "soak_warning_time": "20:00"
++  }
++}
+diff --git a/backend/food-app-sample-data.sql b/backend/food-app-sample-data.sql
+index 39dc6cd..c0fe7a2 100644
+--- a/backend/food-app-sample-data.sql
++++ b/backend/food-app-sample-data.sql
+@@ -246,4 +246,15 @@ WHERE r.name = 'Mixed Vegetable'
+         AND p.meal_slot = 'weekend_lunch'
+   );
+ 
++-- Default weekday tiffin pattern from the spec's open decision list
++-- (Mon/Tue adult, Wed/Fri kids, Thu and weekends none). Standing rows only;
++-- change a row's tiffin_type to edit the pattern (use 'none' to turn a day
++-- off; a deleted row is re-seeded on restart). INSERT OR IGNORE never
++-- overwrites a row you have edited.
++INSERT OR IGNORE INTO tiffin_schedule (day_of_week, effective_date, tiffin_type)
++VALUES ('monday', NULL, 'adult_tiffin'),
++       ('tuesday', NULL, 'adult_tiffin'),
++       ('wednesday', NULL, 'kids_tiffin'),
++       ('friday', NULL, 'kids_tiffin');
++
+ COMMIT;
+diff --git a/backend/food_app_schema_final.sql b/backend/food_app_schema_final.sql
+index 610d2e8..e0c39e8 100644
+--- a/backend/food_app_schema_final.sql
++++ b/backend/food_app_schema_final.sql
+@@ -245,5 +245,18 @@ CREATE TABLE IF NOT EXISTS away_log (
+ );
+ CREATE INDEX IF NOT EXISTS idx_away_log_date ON away_log(away_date);
+ 
++-- ============================================================
++-- SCHEDULER RUN LOG (one row per job run; the unique key makes each
++-- scheduled job fire at most once per run_key, so a server restart can
++-- never resend a push or regenerate a week twice)
++-- ============================================================
++CREATE TABLE IF NOT EXISTS scheduler_run_log (
++    id INTEGER PRIMARY KEY AUTOINCREMENT,
++    job TEXT NOT NULL,
++    run_key TEXT NOT NULL,
++    ran_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
++    UNIQUE (job, run_key)
++);
++
+ -- Future tables intentionally excluded from this first cut:
+ -- receipt parsing tables, per-user preferences, quantity/partial-consumption tracking.
+diff --git a/backend/package.json b/backend/package.json
+index 24de405..9761156 100644
+--- a/backend/package.json
++++ b/backend/package.json
+@@ -5,7 +5,8 @@
+   "main": "server.js",
+   "scripts": {
+     "start": "node server.js",
+-    "dev": "node --watch server.js"
++    "dev": "node --watch server.js",
++    "test": "node --test \"test/**/*.test.js\""
+   },
+   "dependencies": {
+     "bcryptjs": "^3.0.2",
+diff --git a/backend/routes/food.js b/backend/routes/food.js
+index a1e6916..55573a3 100644
+--- a/backend/routes/food.js
++++ b/backend/routes/food.js
+@@ -1,4 +1,14 @@
+ const express = require('express');
++const { rules } = require('../services/rules');
++const { isDate, dateOffset, isMonday, localDateString } = require('../services/dates');
++const { generateWeek } = require('../services/mealPlanner');
++const {
++  RESPONSE,
++  applyMealResponse,
++  getUnconfirmedMeals,
++  isValidCatchUpBody,
++  applyCatchUpResponses,
++} = require('../services/mealResponses');
+ 
+ const WEEK_DAYS = 7;
+ const DAY_MILLISECONDS = 86400000;
+@@ -6,19 +16,8 @@ const DAL_INTERVAL_DAYS = 2;
+ const FRESHNESS_SOON_DAYS = 2;
+ const MEAL_SLOTS = new Set(['kids_tiffin', 'adult_tiffin', 'dinner', 'weekend_lunch']);
+ const AUTO_COOK_MEAL_SLOTS = ['kids_tiffin', 'dinner', 'weekend_lunch'];
+-
+-function isDate(value) {
+-  return typeof value === 'string'
+-    && /^\d{4}-\d{2}-\d{2}$/.test(value)
+-    && !Number.isNaN(Date.parse(`${value}T00:00:00Z`))
+-    && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
+-}
+-
+-function dateOffset(date, days) {
+-  const value = new Date(`${date}T00:00:00Z`);
+-  value.setUTCDate(value.getUTCDate() + days);
+-  return value.toISOString().slice(0, 10);
+-}
++const INVENTORY_STATUS_FILTERS = new Set(['AVAILABLE', 'USED', 'DISCARDED', 'ALL']);
++const INVENTORY_ROW_LIMIT = 500;
+ 
+ function integerList(values) {
+   return Array.isArray(values)
+@@ -50,42 +49,11 @@ function getDalSuggestions(database, weekStart) {
+     });
+ }
+ 
++// A past kids-tiffin / lunch / dinner row nobody marked Skipped is assumed
++// cooked (see README). Uses the same path as the buttons so inventory and the
++// meal log always agree.
+ function confirmCookedPlan(database, plan) {
+-  const updated = database.prepare(`
+-    UPDATE weekly_meal_plan
+-    SET status = 'confirmed_cooked'
+-    WHERE id = ? AND status = 'planned'
+-  `).run(plan.id);
+-  if (updated.changes !== 1) return;
+-
+-  database.prepare(`
+-    INSERT INTO meal_confirmation_log
+-      (plan_id, recipe_id, cooked_date, user_response, source, notes)
+-    VALUES (?, ?, ?, 'yes', 'manual', ?)
+-  `).run(plan.id, plan.recipe_id, plan.meal_date, 'Assumed cooked: no skip was recorded.');
+-
+-  const requiredFresh = database.prepare(`
+-    SELECT i.id
+-    FROM recipe_item ri
+-    JOIN item i ON i.id = ri.item_id
+-    WHERE ri.recipe_id = ? AND ri.role = 'REQUIRED'
+-      AND i.inventory_type = 'FRESH'
+-  `).all(plan.recipe_id);
+-  const findOldestLot = database.prepare(`
+-    SELECT id
+-    FROM inventory
+-    WHERE item_id = ? AND status = 'AVAILABLE'
+-    ORDER BY purchase_date, id
+-    LIMIT 1
+-  `);
+-  const markUsed = database.prepare(`
+-    UPDATE inventory SET status = 'USED', used_date = ?
+-    WHERE id = ? AND status = 'AVAILABLE'
+-  `);
+-  requiredFresh.forEach((item) => {
+-    const lot = findOldestLot.get(item.id);
+-    if (lot) markUsed.run(plan.meal_date, lot.id);
+-  });
++  applyMealResponse(database, plan, RESPONSE.YES, { notes: 'Assumed cooked: no skip was recorded.' });
+ }
+ 
+ function finalizePastMeals(database, today) {
+@@ -194,7 +162,7 @@ function createFoodRouter(database) {
+       || first.name.localeCompare(second.name));
+   }
+ 
+-  function getDashboard(weekStart) {
++  function getDashboard(weekStart, today) {
+     const weekEnd = dateOffset(weekStart, WEEK_DAYS - 1);
+     return {
+       weekStart,
+@@ -232,12 +200,15 @@ function createFoodRouter(database) {
+       dalSuggestions: getDalSuggestions(database, weekStart),
+       plan: database.prepare(`
+         SELECT p.id, p.recipe_id, r.name AS recipe_name, r.description, r.meal_type,
+-               p.meal_date, p.meal_slot, p.status
++               p.meal_date, p.meal_slot, p.tiffin_kid_slot, p.status
+         FROM weekly_meal_plan p
+         JOIN recipe r ON r.id = p.recipe_id
+         WHERE p.meal_date BETWEEN ? AND ? AND p.status != 'replaced'
+         ORDER BY p.meal_date, p.meal_slot, p.id
+       `).all(weekStart, weekEnd),
++      // Past meals nobody has answered yet (catch-up + morning digest).
++      catchupLookbackDays: rules.catchup_lookback_days,
++      unconfirmed: getUnconfirmedMeals(database, today, rules.catchup_lookback_days),
+     };
+   }
+ 
+@@ -265,7 +236,7 @@ function createFoodRouter(database) {
+       return res.status(400).json({ error: 'A valid weekStart date is required.' });
+     }
+     finalizePastMeals(database, today);
+-    return res.json(getDashboard(weekStart));
++    return res.json(getDashboard(weekStart, today));
+   });
+ 
+   router.post('/groceries/stage', (req, res) => {
+@@ -372,55 +343,10 @@ function createFoodRouter(database) {
+       if (!plan || plan.status !== 'planned') {
+         return null;
+       }
+-      if (AUTO_COOK_MEAL_SLOTS.includes(plan.meal_slot) && response !== 'no') {
++      if (AUTO_COOK_MEAL_SLOTS.includes(plan.meal_slot) && response !== RESPONSE.NO) {
+         return null;
+       }
+-
+-      const updated = database.prepare(`
+-        UPDATE weekly_meal_plan
+-        SET status = ?
+-        WHERE id = ? AND status = 'planned'
+-      `).run(response === 'yes' ? 'confirmed_cooked' : response === 'no' ? 'confirmed_skipped' : 'other', planId);
+-      if (updated.changes !== 1) return null;
+-
+-      database.prepare(`
+-        INSERT INTO meal_confirmation_log (plan_id, recipe_id, cooked_date, user_response, source)
+-        VALUES (?, ?, ?, ?, 'manual')
+-      `).run(plan.id, plan.recipe_id, plan.meal_date, response);
+-
+-      const consumed = [];
+-      const missingInventory = [];
+-      if (response === 'yes') {
+-        const requiredFresh = database.prepare(`
+-          SELECT i.id, i.name
+-          FROM recipe_item ri
+-          JOIN item i ON i.id = ri.item_id
+-          WHERE ri.recipe_id = ? AND ri.role = 'REQUIRED'
+-            AND i.inventory_type = 'FRESH'
+-          ORDER BY i.id
+-        `).all(plan.recipe_id);
+-        const findOldestLot = database.prepare(`
+-          SELECT id
+-          FROM inventory
+-          WHERE item_id = ? AND status = 'AVAILABLE'
+-          ORDER BY purchase_date, id
+-          LIMIT 1
+-        `);
+-        const markUsed = database.prepare(`
+-          UPDATE inventory SET status = 'USED', used_date = ?
+-          WHERE id = ? AND status = 'AVAILABLE'
+-        `);
+-        requiredFresh.forEach((item) => {
+-          const lot = findOldestLot.get(item.id);
+-          if (lot) {
+-            markUsed.run(plan.meal_date, lot.id);
+-            consumed.push({ item: item.name, inventoryId: lot.id });
+-          } else {
+-            missingInventory.push(item.name);
+-          }
+-        });
+-      }
+-      return { status: response, consumed, missingInventory };
++      return applyMealResponse(database, plan, response);
+     });
+ 
+     const result = confirmMeal();
+@@ -430,6 +356,56 @@ function createFoodRouter(database) {
+     return res.json(result);
+   });
+ 
++  // Publishes (or tops up) a week's plan on demand. The weekly scheduler runs
++  // the same function; existing plan rows are never overwritten.
++  router.post('/plan/generate', (req, res) => {
++    const { weekStart } = req.body;
++    const today = isDate(req.body.today) ? req.body.today : localDateString(new Date());
++    if (!isDate(weekStart) || !isMonday(weekStart)) {
++      return res.status(400).json({ error: 'weekStart must be the Monday of the week to plan.' });
++    }
++    return res.status(201).json(generateWeek(database, weekStart, { today }));
++  });
++
++  // Catch-up screen (spec 6.4 step 3): answer several past meals at once.
++  router.post('/catchup', (req, res) => {
++    const { responses } = req.body;
++    if (!isValidCatchUpBody(responses)) {
++      return res.status(400).json({ error: 'Choose cooked, skipped or away for one or more meals.' });
++    }
++    return res.json(applyCatchUpResponses(database, responses));
++  });
++
++  // Rows of the inventory table with a freshness label for available lots.
++  router.get('/inventory', (req, res) => {
++    const status = req.query.status === undefined ? 'AVAILABLE' : String(req.query.status).toUpperCase();
++    if (!INVENTORY_STATUS_FILTERS.has(status)) {
++      return res.status(400).json({ error: 'Status must be AVAILABLE, USED, DISCARDED or ALL.' });
++    }
++    const today = isDate(req.query.today) ? req.query.today : localDateString(new Date());
++    const lots = database.prepare(`
++      SELECT inv.id, inv.item_id, i.name AS item_name, i.category, inv.purchase_date,
++             inv.expiry_date, inv.store, inv.status, inv.used_date
++      FROM inventory inv
++      JOIN item i ON i.id = inv.item_id
++      WHERE (? = 'ALL' OR inv.status = ?)
++      ORDER BY CASE inv.status WHEN 'AVAILABLE' THEN 0 ELSE 1 END,
++               inv.expiry_date, inv.purchase_date, inv.id
++      LIMIT ?
++    `).all(status, status, INVENTORY_ROW_LIMIT).map((lot) => {
++      if (lot.status !== 'AVAILABLE' || !lot.expiry_date) return { ...lot, days_until_expiry: null, freshness: null };
++      const daysUntilExpiry = Math.round(
++        (Date.parse(`${lot.expiry_date}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / DAY_MILLISECONDS,
++      );
++      return {
++        ...lot,
++        days_until_expiry: daysUntilExpiry,
++        freshness: daysUntilExpiry < 0 ? 'Old' : daysUntilExpiry <= FRESHNESS_SOON_DAYS ? 'Use soon' : 'Fresh',
++      };
++    });
++    return res.json({ status, today, lots });
++  });
++
+   return router;
+ }
+ 
+diff --git a/backend/server.js b/backend/server.js
+index 939434e..b66746e 100644
+--- a/backend/server.js
++++ b/backend/server.js
+@@ -11,6 +11,8 @@ require('dotenv').config({ path: path.resolve(__dirname, '.env') });
+ const Database = require('better-sqlite3');
+ const foodRoutes = require('./routes/food');
+ const { initializeFoodData } = require('./db/foodData');
++const { createPushSender } = require('./services/pushSender');
++const { createScheduler } = require('./services/scheduler');
+ 
+ const port = Number(process.env.PORT || 5005);
+ const isProduction = process.env.NODE_ENV === 'production';
+@@ -288,11 +290,17 @@ app.use((error, _req, res, _next) => {
+   res.status(500).json({ error: 'The server could not complete the request.' });
+ });
+ 
++// Weekly plan generation, evening confirmation push, retry and soak warning.
++const { sendPushToAll } = createPushSender({ database, webPush, pushConfigured });
++const scheduler = createScheduler({ database, sendPushToAll, pushConfigured });
++
+ const server = app.listen(port, '0.0.0.0', () => {
+   console.log(`Food app API listening on http://localhost:${port}`);
++  scheduler.start();
+ });
+ 
+ const shutdown = () => {
++  scheduler.stop();
+   server.close(() => {
+     database.close();
+     process.exit(0);
+diff --git a/backend/services/dates.js b/backend/services/dates.js
+new file mode 100644
+index 0000000..d9e4f0a
+--- /dev/null
++++ b/backend/services/dates.js
+@@ -0,0 +1,86 @@
++// Small date helpers shared by the planner, scheduler and routes.
++// Plan dates are plain 'YYYY-MM-DD' strings. Calendar math on them is done in
++// UTC so daylight-saving shifts can never move a date.
++const DAY_MILLISECONDS = 86400000;
++const WEEK_DAYS = 7;
++const WEEKDAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
++const SUNDAY = 0;
++const MONDAY = 1;
++const SATURDAY = 6;
++
++function isDate(value) {
++  return typeof value === 'string'
++    && /^\d{4}-\d{2}-\d{2}$/.test(value)
++    && !Number.isNaN(Date.parse(`${value}T00:00:00Z`))
++    && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
++}
++
++function dateOffset(date, days) {
++  const value = new Date(`${date}T00:00:00Z`);
++  value.setUTCDate(value.getUTCDate() + days);
++  return value.toISOString().slice(0, 10);
++}
++
++function daysBetween(fromDate, toDate) {
++  return Math.round((Date.parse(`${toDate}T00:00:00Z`) - Date.parse(`${fromDate}T00:00:00Z`)) / DAY_MILLISECONDS);
++}
++
++function weekdayIndex(date) {
++  return new Date(`${date}T00:00:00Z`).getUTCDay();
++}
++
++function weekdayName(date) {
++  return WEEKDAY_NAMES[weekdayIndex(date)];
++}
++
++function isWeekend(date) {
++  const index = weekdayIndex(date);
++  return index === SATURDAY || index === SUNDAY;
++}
++
++function isMonday(date) {
++  return weekdayIndex(date) === MONDAY;
++}
++
++// Monday of the week that contains `date` (weeks run Monday to Sunday).
++function mondayOf(date) {
++  const daysSinceMonday = (weekdayIndex(date) + 6) % WEEK_DAYS;
++  return dateOffset(date, -daysSinceMonday);
++}
++
++// The server's local calendar date (the household's date, not UTC's).
++function localDateString(now) {
++  const year = now.getFullYear();
++  const month = String(now.getMonth() + 1).padStart(2, '0');
++  const day = String(now.getDate()).padStart(2, '0');
++  return `${year}-${month}-${day}`;
++}
++
++// Local Date for a plan date at 'HH:MM'.
++function localDateAtTime(date, time) {
++  const [year, month, day] = date.split('-').map(Number);
++  const [hours, minutes] = time.split(':').map(Number);
++  return new Date(year, month - 1, day, hours, minutes, 0, 0);
++}
++
++// UTC timestamp in the same 'YYYY-MM-DD HH:MM:SS' shape SQLite's
++// CURRENT_TIMESTAMP produces, so string comparison in SQL stays correct.
++function sqlTimestamp(now) {
++  return now.toISOString().replace('T', ' ').slice(0, 19);
++}
++
++module.exports = {
++  DAY_MILLISECONDS,
++  WEEK_DAYS,
++  isDate,
++  dateOffset,
++  daysBetween,
++  weekdayIndex,
++  weekdayName,
++  isWeekend,
++  isMonday,
++  mondayOf,
++  localDateString,
++  localDateAtTime,
++  sqlTimestamp,
++};
+diff --git a/backend/services/mealPlanner.js b/backend/services/mealPlanner.js
+new file mode 100644
+index 0000000..a863f9c
+--- /dev/null
++++ b/backend/services/mealPlanner.js
+@@ -0,0 +1,395 @@
++// Meal decision pipeline (spec Section 4/4a) and weekly plan publishing
++// (spec Section 5).
++//
++//   decideMeal()   ranks the eligible recipes for ONE date + meal slot.
++//   generateWeek() calls decideMeal() for every slot of a week and writes the
++//                  winners into weekly_meal_plan with status = 'planned'.
++//
++// The UI cards read weekly_meal_plan, never this module, so a published plan
++// stays stable until something explicitly changes it.
++const { rules } = require('./rules');
++const {
++  WEEK_DAYS,
++  dateOffset,
++  daysBetween,
++  weekdayName,
++  weekdayIndex,
++  isWeekend,
++  localDateString,
++} = require('./dates');
++
++const SLOT = Object.freeze({
++  KIDS_TIFFIN: 'kids_tiffin',
++  ADULT_TIFFIN: 'adult_tiffin',
++  WEEKEND_LUNCH: 'weekend_lunch',
++  DINNER: 'dinner',
++});
++const TIFFIN_TYPE = Object.freeze({
++  KIDS: 'kids_tiffin',
++  ADULT: 'adult_tiffin',
++  NONE: 'none',
++});
++const DIETARY = Object.freeze({
++  STRICT_VEG: 'strict_veg',
++  NO_ONION_GARLIC: 'no_onion_garlic',
++  FASTING: 'fasting',
++  NONE: 'none',
++});
++const KIDS_TIFFIN_PARTS = ['AM', 'PM'];
++const DAL_SIDE_MEAL_TYPE = 'dal_side'; // planned separately from the vegetable dish
++const INDIAN_CUISINE = 'Indian';       // adult tiffin must NOT be Indian (spec 4a)
++const NO_EXPIRY_DAYS = 9999;           // sorts lots without an expiry date last
++// Slots where festival menus and the weekend non-veg/frozen preference apply.
++// Tiffin has its own strict rules, so festivals do not steer it.
++const HOME_MEAL_SLOTS = new Set([SLOT.DINNER, SLOT.WEEKEND_LUNCH]);
++// Most-restricted slots choose first so they are not starved of ingredients.
++const SLOT_ORDER = [SLOT.KIDS_TIFFIN, SLOT.ADULT_TIFFIN, SLOT.WEEKEND_LUNCH, SLOT.DINNER];
++const WEEKEND_RANK = Object.freeze({ NON_VEG: 0, FROZEN_FRIENDLY: 1, OTHER: 2 });
++
++// ---------------------------------------------------------------------------
++// Planning context: everything decideMeal() needs, loaded once per run.
++// ---------------------------------------------------------------------------
++
++function groupBy(rows, keyOf) {
++  const groups = new Map();
++  rows.forEach((row) => {
++    const key = keyOf(row);
++    if (!groups.has(key)) groups.set(key, []);
++    groups.get(key).push(row);
++  });
++  return groups;
++}
++
++function loadPlanningContext(database) {
++  const recipes = database.prepare(`
++    SELECT id, name, cuisine, meal_type, is_veg, is_frozen_friendly, cooldown_days,
++           suitable_for_kids_tiffin, suitable_for_adult_tiffin, suitable_for_adult_dinner
++    FROM recipe
++    WHERE approved = 1 AND COALESCE(meal_type, '') != ?
++    ORDER BY name
++  `).all(DAL_SIDE_MEAL_TYPE);
++
++  const itemsByRecipe = groupBy(database.prepare(`
++    SELECT ri.recipe_id AS recipeId, ri.role, i.id AS itemId, i.name,
++           i.inventory_type AS inventoryType, i.always_available AS alwaysAvailable
++    FROM recipe_item ri
++    JOIN item i ON i.id = ri.item_id
++  `).all(), (row) => row.recipeId);
++
++  // Every purchase stays its own lot; the oldest lot is always used first,
++  // exactly like the confirmation flow does when a meal is marked cooked.
++  const lotsByItem = groupBy(database.prepare(`
++    SELECT id, item_id AS itemId, purchase_date AS purchaseDate, expiry_date AS expiryDate
++    FROM inventory
++    WHERE status = 'AVAILABLE'
++    ORDER BY purchase_date, id
++  `).all(), (row) => row.itemId);
++
++  const cookedDatesByRecipe = new Map();
++  database.prepare(`
++    SELECT recipe_id AS recipeId, cooked_date AS cookedDate
++    FROM meal_confirmation_log
++    WHERE user_response = 'yes'
++  `).all().forEach(({ recipeId, cookedDate }) => {
++    if (!cookedDatesByRecipe.has(recipeId)) cookedDatesByRecipe.set(recipeId, []);
++    cookedDatesByRecipe.get(recipeId).push(cookedDate);
++  });
++
++  const awayDates = new Set(database.prepare('SELECT away_date AS awayDate FROM away_log').all()
++    .map((row) => row.awayDate));
++
++  const context = {
++    database,
++    recipes,
++    itemsByRecipe,
++    lotsByItem,
++    cookedDatesByRecipe,
++    awayDates,
++    allocatedByItem: new Map(),   // itemId -> lots already promised to a plan row
++    plannedDatesByRecipe: new Map(),
++    noOnionGarlicNames: new Set(rules.no_onion_garlic_item_names.map((name) => name.toLowerCase())),
++  };
++
++  // Rows that are still 'planned' (even past ones nobody has answered yet)
++  // will use lots when they are cooked, so those lots are already spoken for.
++  database.prepare(`
++    SELECT recipe_id AS recipeId, meal_date AS mealDate
++    FROM weekly_meal_plan
++    WHERE status = 'planned'
++  `).all().forEach(({ recipeId, mealDate }) => {
++    reservePlannedRecipe(context, recipeId, mealDate, requiredFreshItems(context, recipeId));
++  });
++  return context;
++}
++
++function requiredFreshItems(context, recipeId) {
++  return (context.itemsByRecipe.get(recipeId) || [])
++    .filter((item) => item.role === 'REQUIRED' && item.inventoryType === 'FRESH');
++}
++
++function reservePlannedRecipe(context, recipeId, date, freshItems) {
++  freshItems.forEach((item) => {
++    context.allocatedByItem.set(item.itemId, (context.allocatedByItem.get(item.itemId) || 0) + 1);
++  });
++  if (!context.plannedDatesByRecipe.has(recipeId)) context.plannedDatesByRecipe.set(recipeId, []);
++  context.plannedDatesByRecipe.get(recipeId).push(date);
++}
++
++// ---------------------------------------------------------------------------
++// Tiffin schedule (spec 4a): one-off override > weekday default > 'none'.
++// ---------------------------------------------------------------------------
++
++function resolveTiffinType(database, date) {
++  const override = database.prepare(
++    'SELECT tiffin_type AS tiffinType FROM tiffin_schedule WHERE effective_date = ?',
++  ).get(date);
++  if (override) return override.tiffinType;
++
++  const standing = database.prepare(`
++    SELECT tiffin_type AS tiffinType
++    FROM tiffin_schedule
++    WHERE day_of_week = ? AND effective_date IS NULL
++  `).get(weekdayName(date));
++  return standing ? standing.tiffinType : TIFFIN_TYPE.NONE;
++}
++
++// Cycle day is derived from the weekday at write time: Monday = 1,
++// Tuesday = 2, Wednesday = 1, and so on.
++function adultTiffinCycleDay(date) {
++  return weekdayIndex(date) % 2 === 1 ? 1 : 2;
++}
++
++// ---------------------------------------------------------------------------
++// decideMeal() building blocks
++// ---------------------------------------------------------------------------
++
++// Counts calendar days between a past date and the target date, skipping
++// away days, so a vacation does not "use up" the cooldown (spec Section 7).
++function isWithinWindow(context, pastDate, targetDate, windowDays) {
++  const rawDays = daysBetween(pastDate, targetDate);
++  if (rawDays <= 0) return true;
++  if (rawDays > windowDays + context.awayDates.size) return false;
++  let countedDays = 0;
++  for (let offset = 1; offset <= rawDays; offset += 1) {
++    if (!context.awayDates.has(dateOffset(pastDate, offset))) countedDays += 1;
++  }
++  return countedDays < windowDays;
++}
++
++function wasCookedWithin(context, recipeId, date, windowDays) {
++  return (context.cookedDatesByRecipe.get(recipeId) || [])
++    .some((cookedDate) => isWithinWindow(context, cookedDate, date, windowDays));
++}
++
++function wasPlannedNear(context, recipeId, date, windowDays) {
++  return (context.plannedDatesByRecipe.get(recipeId) || [])
++    .some((plannedDate) => Math.abs(daysBetween(plannedDate, date)) < windowDays);
++}
++
++// Step 1: every REQUIRED ingredient must be present. Returns the fresh lots
++// this recipe would consume (oldest unclaimed lot per item) or null.
++function findFreshLots(context, recipe) {
++  const required = (context.itemsByRecipe.get(recipe.id) || []).filter((item) => item.role === 'REQUIRED');
++  const freshLots = [];
++  const isMissing = required.some((item) => {
++    if (item.alwaysAvailable) return false;
++    const lots = context.lotsByItem.get(item.itemId) || [];
++    const claimed = context.allocatedByItem.get(item.itemId) || 0;
++    if (claimed >= lots.length) return true;
++    if (item.inventoryType === 'FRESH') freshLots.push({ item, lot: lots[claimed] });
++    return false;
++  });
++  // A recipe with no fresh required item is not driven by inventory, so the
++  // planner leaves it to manual planning (same rule as the recommendations).
++  return isMissing || freshLots.length === 0 ? null : freshLots;
++}
++
++// Step 3: what the calendar says about this date.
++function getCalendarInfo(database, date) {
++  const rows = database.prepare(`
++    SELECT festival_id AS festivalId, dietary_restriction AS dietaryRestriction
++    FROM calendar_date
++    WHERE calendar_date = ?
++  `).all(date);
++  const festivalIds = rows.map((row) => row.festivalId).filter((id) => id !== null);
++  const festivalRecipes = new Map(); // recipeId -> family_preference (0/1)
++  if (festivalIds.length > 0) {
++    database.prepare(`
++      SELECT fr.recipe_id AS recipeId, fr.family_preference AS familyPreference
++      FROM festival_recipe fr
++      JOIN festival f ON f.id = fr.festival_id
++      WHERE f.active = 1 AND fr.festival_id IN (${festivalIds.map(() => '?').join(', ')})
++    `).all(...festivalIds).forEach(({ recipeId, familyPreference }) => {
++      festivalRecipes.set(recipeId, Math.max(familyPreference, festivalRecipes.get(recipeId) || 0));
++    });
++  }
++  return {
++    hasFestival: festivalIds.length > 0,
++    restrictions: new Set(rows.map((row) => row.dietaryRestriction).filter((value) => value !== DIETARY.NONE)),
++    festivalRecipes,
++  };
++}
++
++function passesDietaryRestrictions(context, recipe, restrictions) {
++  const needsVeg = restrictions.has(DIETARY.STRICT_VEG) || restrictions.has(DIETARY.FASTING);
++  if (needsVeg && !recipe.is_veg) return false;
++  const skipsOnionGarlic = restrictions.has(DIETARY.NO_ONION_GARLIC) || restrictions.has(DIETARY.FASTING);
++  if (!skipsOnionGarlic) return true;
++  return !(context.itemsByRecipe.get(recipe.id) || [])
++    .some((item) => context.noOnionGarlicNames.has(item.name.toLowerCase()));
++}
++
++// Step 6 placeholder: guest handling is not built yet, so this is a no-op
++// that keeps the pipeline position reserved for when it is.
++function checkGuestCalendar() {
++  return { guestCount: 0 };
++}
++
++// Step 7: meal-slot rules. Lunch has no suitability flag, so any approved
++// non-dal-side recipe qualifies (same as the manual planner).
++function matchesSlot(recipe, slot) {
++  if (slot === SLOT.KIDS_TIFFIN) return Boolean(recipe.suitable_for_kids_tiffin);
++  if (slot === SLOT.ADULT_TIFFIN) {
++    return Boolean(recipe.suitable_for_adult_tiffin) && recipe.cuisine !== INDIAN_CUISINE;
++  }
++  if (slot === SLOT.DINNER) return Boolean(recipe.suitable_for_adult_dinner);
++  return true;
++}
++
++function weekendRank(recipe) {
++  if (!recipe.is_veg) return WEEKEND_RANK.NON_VEG;
++  return recipe.is_frozen_friendly ? WEEKEND_RANK.FROZEN_FRIENDLY : WEEKEND_RANK.OTHER;
++}
++
++// ---------------------------------------------------------------------------
++// decideMeal(): the ordered pipeline for one date + slot.
++// Returns eligible candidates, best first (the caller uses the top one, or
++// shows the top N for a person to choose from).
++// ---------------------------------------------------------------------------
++function decideMeal(context, { date, slot }) {
++  const calendar = getCalendarInfo(context.database, date);
++  checkGuestCalendar(context.database, date); // step 6 (stub)
++
++  let candidates = context.recipes.flatMap((recipe) => {
++    // Step 1: required ingredients present and AVAILABLE.
++    const freshLots = findFreshLots(context, recipe);
++    if (!freshLots) return [];
++    // Step 2: cooldown (only 'yes' log rows count; away days are skipped).
++    const cooldownDays = recipe.cooldown_days ?? rules.default_cooldown_days;
++    if (wasCookedWithin(context, recipe.id, date, cooldownDays)) return [];
++    // Step 3 (dietary part): fasting / strict veg / no onion-garlic days.
++    if (!passesDietaryRestrictions(context, recipe, calendar.restrictions)) return [];
++    // Step 7: slot rules (kids / adult tiffin / dinner).
++    if (!matchesSlot(recipe, slot)) return [];
++    // Step 8: avoid recent repeats, both cooked and already planned.
++    const repeatWindowDays = Math.max(cooldownDays, rules.repeat_avoidance_lookback_days);
++    if (wasCookedWithin(context, recipe.id, date, rules.repeat_avoidance_lookback_days)
++      || wasPlannedNear(context, recipe.id, date, repeatWindowDays)) return [];
++
++    // Step 9 input: days until the soonest-expiring lot this recipe would use.
++    const soonestExpiryDays = Math.min(...freshLots.map(({ lot }) => (
++      lot.expiryDate ? daysBetween(date, lot.expiryDate) : NO_EXPIRY_DAYS
++    )));
++    return [{
++      recipe,
++      freshLots,
++      soonestExpiryDays,
++      festivalPreference: calendar.festivalRecipes.get(recipe.id),
++    }];
++  });
++
++  // Step 3 (festival part): on a festival, restrict to that festival's
++  // recipes first. If none of them can be made, fall back to everything.
++  const usesFestivalMenu = HOME_MEAL_SLOTS.has(slot) && calendar.festivalRecipes.size > 0;
++  if (usesFestivalMenu) {
++    const festivalCandidates = candidates.filter((entry) => entry.festivalPreference !== undefined);
++    if (festivalCandidates.length > 0) candidates = festivalCandidates;
++  }
++
++  // Step 4: weekend with no festival prefers non-veg, then frozen-friendly.
++  const prefersWeekendDishes = HOME_MEAL_SLOTS.has(slot) && isWeekend(date) && !calendar.hasFestival;
++
++  // Steps 4 and 9: preferences first, then soonest-expiring produce first.
++  return candidates.sort((first, second) => (
++    (second.festivalPreference ?? -1) - (first.festivalPreference ?? -1)
++    || (prefersWeekendDishes ? weekendRank(first.recipe) - weekendRank(second.recipe) : 0)
++    || first.soonestExpiryDays - second.soonestExpiryDays
++    || first.recipe.name.localeCompare(second.recipe.name)
++  ));
++}
++
++// ---------------------------------------------------------------------------
++// Weekly publishing
++// ---------------------------------------------------------------------------
++
++// The slots that exist on a date: tiffin per tiffin_schedule, weekend lunch
++// on Sat/Sun, dinner every day.
++function slotsForDate(database, date) {
++  const tiffinType = resolveTiffinType(database, date);
++  const slots = [];
++  if (tiffinType === TIFFIN_TYPE.KIDS) slots.push({ slot: SLOT.KIDS_TIFFIN, kidParts: KIDS_TIFFIN_PARTS });
++  if (tiffinType === TIFFIN_TYPE.ADULT) slots.push({ slot: SLOT.ADULT_TIFFIN, kidParts: [null] });
++  if (isWeekend(date)) slots.push({ slot: SLOT.WEEKEND_LUNCH, kidParts: [null] });
++  slots.push({ slot: SLOT.DINNER, kidParts: [null] });
++  return slots.sort((first, second) => SLOT_ORDER.indexOf(first.slot) - SLOT_ORDER.indexOf(second.slot));
++}
++
++// Fills the empty slots of one Monday-to-Sunday week. Safe to run again:
++// a slot that already has a plan row (manual or generated) is left alone, and
++// dates before `today` are never touched.
++function generateWeek(database, weekStart, { today = localDateString(new Date()) } = {}) {
++  const context = loadPlanningContext(database);
++  const summary = { weekStart, created: 0, alreadyPlanned: 0, unfilled: [], plan: [] };
++  const hasPlanRow = database.prepare(`
++    SELECT 1 FROM weekly_meal_plan
++    WHERE meal_date = ? AND meal_slot = ? AND status != 'replaced'
++    LIMIT 1
++  `);
++  const insertPlanRow = database.prepare(`
++    INSERT INTO weekly_meal_plan
++      (recipe_id, meal_date, meal_slot, tiffin_kid_slot, tiffin_adult_cycle_day, status)
++    VALUES (?, ?, ?, ?, ?, 'planned')
++  `);
++
++  database.transaction(() => {
++    for (let offset = 0; offset < WEEK_DAYS; offset += 1) {
++      const date = dateOffset(weekStart, offset);
++      if (date < today) continue;
++
++      slotsForDate(database, date).forEach(({ slot, kidParts }) => {
++        if (hasPlanRow.get(date, slot)) {
++          summary.alreadyPlanned += 1;
++          return;
++        }
++        kidParts.forEach((kidPart) => {
++          // Each pick is reserved before the next call, so the PM tiffin can
++          // never repeat the AM one and one lot is never promised twice.
++          const [best] = decideMeal(context, { date, slot });
++          if (!best) {
++            summary.unfilled.push({ date, slot, kidPart });
++            return;
++          }
++          insertPlanRow.run(
++            best.recipe.id,
++            date,
++            slot,
++            kidPart,
++            slot === SLOT.ADULT_TIFFIN ? adultTiffinCycleDay(date) : null,
++          );
++          reservePlannedRecipe(context, best.recipe.id, date, best.freshLots.map(({ item }) => item));
++          summary.created += 1;
++          summary.plan.push({ date, slot, kidPart, recipe: best.recipe.name });
++        });
++      });
++    }
++  })();
++  return summary;
++}
++
++module.exports = {
++  SLOT,
++  loadPlanningContext,
++  resolveTiffinType,
++  decideMeal,
++  generateWeek,
++};
+diff --git a/backend/services/mealResponses.js b/backend/services/mealResponses.js
+new file mode 100644
+index 0000000..e98784e
+--- /dev/null
++++ b/backend/services/mealResponses.js
+@@ -0,0 +1,155 @@
++// One place that decides what "cooked / skipped / other" means for the plan,
++// the meal log and inventory. The card buttons, the automatic past-meal
++// finalizer and the catch-up screen all go through applyMealResponse so the
++// three paths can never drift apart.
++const { dateOffset } = require('./dates');
++
++const RESPONSE = Object.freeze({ YES: 'yes', NO: 'no', OTHER: 'other' });
++const STATUS_BY_RESPONSE = Object.freeze({
++  [RESPONSE.YES]: 'confirmed_cooked',
++  [RESPONSE.NO]: 'confirmed_skipped',
++  [RESPONSE.OTHER]: 'other',
++});
++const CATCHUP_CHOICE = Object.freeze({ COOKED: 'cooked', SKIPPED: 'skipped', AWAY: 'away' });
++const LOG_SOURCE_MANUAL = 'manual';
++const AWAY_REASON_OTHER = 'other';
++const AWAY_DETECTED_MANUALLY = 'manual';
++const MAX_CATCHUP_RESPONSES = 100;
++
++// Full-item consumption (spec 6.2): flip the oldest AVAILABLE lot of every
++// REQUIRED fresh item to USED. Always-available staples have no lots.
++function consumeRequiredFreshItems(database, plan) {
++  const requiredFresh = database.prepare(`
++    SELECT i.id, i.name
++    FROM recipe_item ri
++    JOIN item i ON i.id = ri.item_id
++    WHERE ri.recipe_id = ? AND ri.role = 'REQUIRED'
++      AND i.inventory_type = 'FRESH'
++    ORDER BY i.id
++  `).all(plan.recipe_id);
++  const findOldestLot = database.prepare(`
++    SELECT id
++    FROM inventory
++    WHERE item_id = ? AND status = 'AVAILABLE'
++    ORDER BY purchase_date, id
++    LIMIT 1
++  `);
++  const markUsed = database.prepare(`
++    UPDATE inventory SET status = 'USED', used_date = ?
++    WHERE id = ? AND status = 'AVAILABLE'
++  `);
++
++  const consumed = [];
++  const missingInventory = [];
++  requiredFresh.forEach((item) => {
++    const lot = findOldestLot.get(item.id);
++    if (lot) {
++      markUsed.run(plan.meal_date, lot.id);
++      consumed.push({ item: item.name, inventoryId: lot.id });
++    } else {
++      missingInventory.push(item.name);
++    }
++  });
++  return { consumed, missingInventory };
++}
++
++// Records one response for a plan row. Callers wrap this in a transaction.
++// Returns null when the row is no longer 'planned' (already answered).
++function applyMealResponse(database, plan, response, { source = LOG_SOURCE_MANUAL, notes = null } = {}) {
++  const updated = database.prepare(`
++    UPDATE weekly_meal_plan
++    SET status = ?
++    WHERE id = ? AND status = 'planned'
++  `).run(STATUS_BY_RESPONSE[response], plan.id);
++  if (updated.changes !== 1) return null;
++
++  database.prepare(`
++    INSERT INTO meal_confirmation_log
++      (plan_id, recipe_id, cooked_date, user_response, source, notes)
++    VALUES (?, ?, ?, ?, ?, ?)
++  `).run(plan.id, plan.recipe_id, plan.meal_date, response, source, notes);
++
++  // "No" and "Other" never touch inventory (spec 6.1).
++  if (response !== RESPONSE.YES) {
++    return { status: response, consumed: [], missingInventory: [] };
++  }
++  return { status: response, ...consumeRequiredFreshItems(database, plan) };
++}
++
++// Meals still 'planned' whose date has passed, within the catch-up window.
++// This feeds both the catch-up prompt (spec 6.4 step 3) and the passive
++// morning digest (step 4): the app is the backstop when a push is lost.
++function getUnconfirmedMeals(database, today, lookbackDays) {
++  return database.prepare(`
++    SELECT p.id, p.recipe_id, r.name AS recipe_name, p.meal_date, p.meal_slot,
++           p.tiffin_kid_slot, p.status
++    FROM weekly_meal_plan p
++    JOIN recipe r ON r.id = p.recipe_id
++    WHERE p.status = 'planned'
++      AND p.meal_date < ?
++      AND p.meal_date >= ?
++    ORDER BY p.meal_date, p.meal_slot, p.id
++  `).all(today, dateOffset(today, -lookbackDays));
++}
++
++function recordAwayDay(database, date) {
++  database.prepare(`
++    INSERT OR IGNORE INTO away_log (away_date, reason, detected_via, notes)
++    VALUES (?, ?, ?, 'Marked away from the meal catch-up screen.')
++  `).run(date, AWAY_REASON_OTHER, AWAY_DETECTED_MANUALLY);
++}
++
++function isValidCatchUpBody(responses) {
++  if (!Array.isArray(responses) || responses.length === 0 || responses.length > MAX_CATCHUP_RESPONSES) {
++    return false;
++  }
++  const choices = Object.values(CATCHUP_CHOICE);
++  const planIds = responses.map((entry) => entry?.planId);
++  return responses.every((entry) => Number.isSafeInteger(entry?.planId)
++    && entry.planId > 0
++    && choices.includes(entry.response))
++    && new Set(planIds).size === planIds.length;
++}
++
++// Applies the catch-up multi-select. Same log/inventory effects as the
++// card buttons: cooked -> yes (inventory used), skipped -> no, away -> no
++// plus an away_log row so cooldown math ignores that day (spec 7).
++function applyCatchUpResponses(database, responses) {
++  const findPlan = database.prepare(`
++    SELECT id, recipe_id, meal_date, meal_slot, status
++    FROM weekly_meal_plan
++    WHERE id = ?
++  `);
++  const outcome = { saved: 0, alreadyAnswered: 0, consumed: [], missingInventory: [] };
++
++  database.transaction(() => {
++    responses.forEach(({ planId, response }) => {
++      const plan = findPlan.get(planId);
++      if (!plan || plan.status !== 'planned') {
++        outcome.alreadyAnswered += 1;
++        return;
++      }
++      const mealResponse = response === CATCHUP_CHOICE.COOKED ? RESPONSE.YES : RESPONSE.NO;
++      const result = applyMealResponse(database, plan, mealResponse, {
++        notes: `Catch-up screen: ${response}.`,
++      });
++      if (!result) {
++        outcome.alreadyAnswered += 1;
++        return;
++      }
++      if (response === CATCHUP_CHOICE.AWAY) recordAwayDay(database, plan.meal_date);
++      outcome.saved += 1;
++      outcome.consumed.push(...result.consumed);
++      outcome.missingInventory.push(...result.missingInventory);
++    });
++  })();
++  return outcome;
++}
++
++module.exports = {
++  RESPONSE,
++  applyMealResponse,
++  getUnconfirmedMeals,
++  isValidCatchUpBody,
++  applyCatchUpResponses,
++};
+diff --git a/backend/services/pushSender.js b/backend/services/pushSender.js
+new file mode 100644
+index 0000000..49de9b3
+--- /dev/null
++++ b/backend/services/pushSender.js
+@@ -0,0 +1,37 @@
++// Sends one payload to every subscribed device of the household.
++// Food data is household-wide (not per user), so scheduled reminders go to
++// every subscription. Dead subscriptions (HTTP 404/410) are pruned.
++const NO_LONGER_VALID_STATUS_CODES = [404, 410];
++
++function createPushSender({ database, webPush, pushConfigured }) {
++  async function sendPushToAll(payload) {
++    const result = { attempted: 0, sent: 0, failed: 0 };
++    if (!pushConfigured) return result;
++
++    const subscriptions = database.prepare(
++      'SELECT endpoint, p256dh, auth FROM push_subscriptions',
++    ).all();
++    result.attempted = subscriptions.length;
++
++    const outcomes = await Promise.allSettled(subscriptions.map((subscription) => webPush.sendNotification(
++      { endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } },
++      JSON.stringify(payload),
++    )));
++    outcomes.forEach((outcome, index) => {
++      if (outcome.status === 'fulfilled') {
++        result.sent += 1;
++        return;
++      }
++      result.failed += 1;
++      if (NO_LONGER_VALID_STATUS_CODES.includes(outcome.reason?.statusCode)) {
++        database.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?')
++          .run(subscriptions[index].endpoint);
++      }
++    });
++    return result;
++  }
++
++  return { sendPushToAll };
++}
++
++module.exports = { createPushSender };
+diff --git a/backend/services/rules.js b/backend/services/rules.js
+new file mode 100644
+index 0000000..f743a18
+--- /dev/null
++++ b/backend/services/rules.js
+@@ -0,0 +1,10 @@
++// Loads config/rules.json once. Keeping tunable numbers and schedule times in
++// JSON (spec Section 8, rule 4) means nothing below hardcodes them.
++const fs = require('node:fs');
++const path = require('node:path');
++
++const RULES_PATH = path.join(__dirname, '..', 'config', 'rules.json');
++
++const rules = Object.freeze(JSON.parse(fs.readFileSync(RULES_PATH, 'utf8')));
++
++module.exports = { rules };
+diff --git a/backend/services/scheduler.js b/backend/services/scheduler.js
+new file mode 100644
+index 0000000..86bda77
+--- /dev/null
++++ b/backend/services/scheduler.js
+@@ -0,0 +1,209 @@
++// In-process scheduler for the weekly plan and the push workflows.
++//
++// A single tick runs every minute. Each job decides for itself whether it is
++// due, and records a (job, run_key) row in scheduler_run_log first, so:
++//   - restarting the server never sends the same push twice, and
++//   - a job missed while the server was off runs on the next tick.
++// (Section 6.4: a pure timer that "just hopes" is not reliable enough.)
++const { rules } = require('./rules');
++const { generateWeek } = require('./mealPlanner');
++const {
++  WEEK_DAYS,
++  dateOffset,
++  mondayOf,
++  localDateString,
++  localDateAtTime,
++  sqlTimestamp,
++} = require('./dates');
++
++const JOB = Object.freeze({
++  WEEKLY_GENERATION: 'weekly_generation',
++  EVENING_CONFIRMATION: 'evening_confirmation',
++  SOAK_WARNING: 'soak_warning',
++});
++const MILLISECONDS_PER_SECOND = 1000;
++const MILLISECONDS_PER_HOUR = 3600000;
++const SLOT_LABELS = Object.freeze({
++  kids_tiffin: 'kids tiffin',
++  adult_tiffin: 'adult tiffin',
++  weekend_lunch: 'lunch',
++  dinner: 'dinner',
++});
++const MAX_NAMES_IN_MESSAGE = 2;
++
++function joinNames(names) {
++  const shown = names.slice(0, MAX_NAMES_IN_MESSAGE).join(', ');
++  const hidden = names.length - MAX_NAMES_IN_MESSAGE;
++  return hidden > 0 ? `${shown} and ${hidden} more` : shown;
++}
++
++function createScheduler({ database, sendPushToAll, pushConfigured, logger = console }) {
++  const schedule = rules.schedule;
++  let timer = null;
++  let isTickRunning = false;
++
++  // Claim a run so it only ever happens once per key. Returns false when
++  // this (job, key) already ran.
++  function claimRun(job, runKey, now) {
++    const claimed = database.prepare(`
++      INSERT OR IGNORE INTO scheduler_run_log (job, run_key, ran_at) VALUES (?, ?, ?)
++    `).run(job, runKey, sqlTimestamp(now));
++    return claimed.changes === 1;
++  }
++
++  function releaseRun(job, runKey) {
++    database.prepare('DELETE FROM scheduler_run_log WHERE job = ? AND run_key = ?').run(job, runKey);
++  }
++
++  function isPastTime(now, date, time) {
++    return now >= localDateAtTime(date, time);
++  }
++
++  // --- Section 5: weekly plan publishing ---------------------------------
++  // The plan for a week is generated the evening before it starts. The
++  // current week is also checked, so a missed Sunday run is made up for.
++  function runWeeklyGeneration(now) {
++    if (!schedule.weekly_generation_enabled) return;
++    const today = localDateString(now);
++    const thisWeekStart = mondayOf(today);
++
++    [thisWeekStart, dateOffset(thisWeekStart, WEEK_DAYS)].forEach((weekStart) => {
++      const dueOn = dateOffset(weekStart, -1);
++      if (!isPastTime(now, dueOn, schedule.weekly_generation_time)) return;
++      if (!claimRun(JOB.WEEKLY_GENERATION, weekStart, now)) return;
++      try {
++        const summary = generateWeek(database, weekStart, { today });
++        logger.log(`Weekly plan for ${weekStart}: ${summary.created} planned, `
++          + `${summary.alreadyPlanned} slots already had a plan, ${summary.unfilled.length} left empty.`);
++      } catch (error) {
++        releaseRun(JOB.WEEKLY_GENERATION, weekStart); // try again next tick
++        logger.error(`Weekly plan generation for ${weekStart} failed:`, error);
++      }
++    });
++  }
++
++  // --- Section 6.1: evening confirmation push ----------------------------
++  // One push per evening listing today's unanswered plan rows. Sending sets
++  // notified_at, which arms the retry job below.
++  async function runEveningConfirmation(now) {
++    if (!pushConfigured) return;
++    const today = localDateString(now);
++    if (!isPastTime(now, today, schedule.evening_confirmation_time)) return;
++    if (!claimRun(JOB.EVENING_CONFIRMATION, today, now)) return;
++
++    const rows = database.prepare(`
++      SELECT p.id, r.name AS recipeName
++      FROM weekly_meal_plan p
++      JOIN recipe r ON r.id = p.recipe_id
++      WHERE p.meal_date = ? AND p.status = 'planned' AND p.notified_at IS NULL
++      ORDER BY p.meal_slot, p.id
++    `).all(today);
++    if (rows.length === 0) return;
++
++    const names = rows.map((row) => row.recipeName);
++    const result = await sendPushToAll({
++      title: 'Did you cook today?',
++      body: names.length === 1
++        ? `Did you cook ${names[0]}? Tap to confirm.`
++        : `Did you cook ${joinNames(names)}? Tap to confirm.`,
++      url: '/',
++      tag: `meal-confirmation-${today}`,
++    });
++    // Nobody subscribed means nothing was attempted: leave notified_at empty
++    // so the in-app catch-up and digest remain the backstop.
++    if (result.attempted === 0) return;
++    const markNotified = database.prepare('UPDATE weekly_meal_plan SET notified_at = ? WHERE id = ?');
++    database.transaction(() => rows.forEach((row) => markNotified.run(sqlTimestamp(now), row.id)))();
++  }
++
++  // --- Section 6.4 step 2: one retry per unanswered row ------------------
++  async function runRetry(now) {
++    if (!pushConfigured) return;
++    const today = localDateString(now);
++    const cutoff = sqlTimestamp(new Date(now.getTime() - rules.push_retry_hours * MILLISECONDS_PER_HOUR));
++    const rows = database.prepare(`
++      SELECT p.id, r.name AS recipeName
++      FROM weekly_meal_plan p
++      JOIN recipe r ON r.id = p.recipe_id
++      WHERE p.status = 'planned'
++        AND p.notified_at IS NOT NULL
++        AND p.notified_at <= ?
++        AND p.retry_sent_at IS NULL
++        AND p.meal_date >= ?
++      ORDER BY p.meal_date, p.meal_slot, p.id
++    `).all(cutoff, dateOffset(today, -rules.catchup_lookback_days));
++    if (rows.length === 0) return;
++
++    // Stamp first so a slow push service can never cause a second retry.
++    const markRetried = database.prepare('UPDATE weekly_meal_plan SET retry_sent_at = ? WHERE id = ?');
++    database.transaction(() => rows.forEach((row) => markRetried.run(sqlTimestamp(now), row.id)))();
++
++    const names = rows.map((row) => row.recipeName);
++    await sendPushToAll({
++      title: 'Still need your answer',
++      body: `You haven't confirmed ${joinNames(names)} yet. Tap to update the app.`,
++      url: '/',
++      tag: `meal-confirmation-retry-${today}`,
++    });
++  }
++
++  // --- Section 6.3: soak / marination early warning ----------------------
++  async function runSoakWarning(now) {
++    if (!pushConfigured) return;
++    const today = localDateString(now);
++    if (!isPastTime(now, today, schedule.soak_warning_time)) return;
++    if (!claimRun(JOB.SOAK_WARNING, today, now)) return;
++
++    const tomorrow = dateOffset(today, 1);
++    const meals = database.prepare(`
++      SELECT r.name AS recipeName, p.meal_slot AS mealSlot
++      FROM recipe r
++      JOIN weekly_meal_plan p ON p.recipe_id = r.id
++      WHERE r.requires_soak_marination = 1
++        AND p.meal_date = ?
++        AND p.status = 'planned'
++      ORDER BY p.meal_slot, p.id
++    `).all(tomorrow);
++    if (meals.length === 0) return;
++
++    const slotNames = [...new Set(meals.map((meal) => SLOT_LABELS[meal.mealSlot] || meal.mealSlot))];
++    await sendPushToAll({
++      title: 'Soak tonight',
++      body: `Tomorrow's ${slotNames.join(' and ')} requires soaking (${joinNames(meals.map((meal) => meal.recipeName))}). Start soaking tonight!`,
++      url: '/',
++      tag: `soak-warning-${tomorrow}`,
++    });
++  }
++
++  // One pass over every job. `now` is injectable so tests can move the clock.
++  async function tick(now = new Date()) {
++    if (isTickRunning) return;
++    isTickRunning = true;
++    try {
++      runWeeklyGeneration(now);
++      // Generate first: a fresh plan may contain today's rows to notify about.
++      await runEveningConfirmation(now);
++      await runRetry(now);
++      await runSoakWarning(now);
++    } catch (error) {
++      logger.error('Scheduler tick failed:', error);
++    } finally {
++      isTickRunning = false;
++    }
++  }
++
++  function start() {
++    if (timer) return;
++    tick();
++    timer = setInterval(() => tick(), schedule.tick_seconds * MILLISECONDS_PER_SECOND);
++  }
++
++  function stop() {
++    if (timer) clearInterval(timer);
++    timer = null;
++  }
++
++  return { start, stop, tick };
++}
++
++module.exports = { createScheduler };
+diff --git a/backend/test/planner-and-scheduler.test.js b/backend/test/planner-and-scheduler.test.js
+new file mode 100644
+index 0000000..d501d8c
+--- /dev/null
++++ b/backend/test/planner-and-scheduler.test.js
+@@ -0,0 +1,337 @@
++// Run with: npm --prefix backend test
++// Uses an in-memory database seeded from the real schema + sample data, a
++// fake push sender, and an injectable clock, so nothing touches the network
++// or the real food-app.sqlite.
++const test = require('node:test');
++const assert = require('node:assert/strict');
++const express = require('express');
++const Database = require('better-sqlite3');
++const { initializeFoodData } = require('../db/foodData');
++const foodRoutes = require('../routes/food');
++const { generateWeek, loadPlanningContext, decideMeal } = require('../services/mealPlanner');
++const { createScheduler } = require('../services/scheduler');
++
++const SILENT_LOGGER = { log() {}, error() {} };
++
++function createDatabase() {
++  const database = new Database(':memory:');
++  database.pragma('foreign_keys = ON');
++  database.exec(`
++    CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT);
++    CREATE TABLE push_subscriptions (
++      id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, endpoint TEXT UNIQUE,
++      p256dh TEXT, auth TEXT, user_agent TEXT
++    );
++  `);
++  initializeFoodData(database);
++  // The sample data ships a few past plan rows; treat them as already answered
++  // so they do not reserve inventory in these scenarios.
++  database.prepare("UPDATE weekly_meal_plan SET status = 'confirmed_skipped'").run();
++  return database;
++}
++
++const recipeId = (database, name) => database.prepare('SELECT id FROM recipe WHERE name = ?').get(name).id;
++const planRows = (database, where = '1 = 1') => database.prepare(`
++  SELECT p.id, r.name AS recipe, p.meal_date AS date, p.meal_slot AS slot,
++         p.tiffin_kid_slot AS kidSlot, p.tiffin_adult_cycle_day AS cycleDay, p.status,
++         p.notified_at AS notifiedAt, p.retry_sent_at AS retrySentAt
++  FROM weekly_meal_plan p JOIN recipe r ON r.id = p.recipe_id
++  WHERE ${where}
++  ORDER BY p.meal_date, p.meal_slot, p.id
++`).all();
++
++// Monday 2026-10-05 .. Sunday 2026-10-11. Sept lots are still AVAILABLE.
++const WEEK_START = '2026-10-05';
++const at = (day, hours, minutes = 0) => new Date(2026, 9, day, hours, minutes);
++
++test('generateWeek fills the week, never promises one lot twice, and is idempotent', () => {
++  const database = createDatabase();
++  const summary = generateWeek(database, WEEK_START, { today: '2026-10-05' });
++  const rows = planRows(database, "p.status = 'planned'");
++
++  assert.ok(summary.created > 0);
++  assert.equal(rows.length, summary.created);
++  // Tiffin comes from tiffin_schedule: Wednesday is kids (AM + PM), Monday adult.
++  const wednesday = rows.filter((row) => row.date === '2026-10-07' && row.slot === 'kids_tiffin');
++  assert.deepEqual(wednesday.map((row) => row.kidSlot).sort(), ['AM', 'PM']);
++  assert.notEqual(wednesday[0].recipe, wednesday[1].recipe);
++  // Sample data has no non-Indian adult-tiffin recipe, so Monday's stays empty.
++  assert.ok(summary.unfilled.some((slot) => slot.date === '2026-10-05' && slot.slot === 'adult_tiffin'));
++  // Weekend lunch only on Sat/Sun; dinner is attempted every day.
++  assert.deepEqual(rows.filter((row) => row.slot === 'weekend_lunch').map((row) => row.date).every(
++    (date) => ['2026-10-10', '2026-10-11'].includes(date),
++  ), true);
++
++  // Inventory: 2 Bhindi lots, 1 Carrot lot => Carrot recipes appear at most once.
++  const carrotRecipes = rows.filter((row) => ['Gajar Matar', 'Mixed Vegetable'].includes(row.recipe));
++  assert.ok(carrotRecipes.length <= 1);
++  // No recipe repeats within the week.
++  assert.equal(new Set(rows.map((row) => row.recipe)).size, rows.length);
++
++  const second = generateWeek(database, WEEK_START, { today: '2026-10-05' });
++  assert.equal(second.created, 0);
++  assert.equal(planRows(database, "p.status = 'planned'").length, rows.length);
++});
++
++test('generateWeek leaves manual rows and past dates alone', () => {
++  const database = createDatabase();
++  database.prepare(`
++    INSERT INTO weekly_meal_plan (recipe_id, meal_date, meal_slot, status)
++    VALUES (?, '2026-10-06', 'dinner', 'planned')
++  `).run(recipeId(database, 'Baingan Bharta'));
++
++  generateWeek(database, WEEK_START, { today: '2026-10-07' });
++  const rows = planRows(database, "p.status = 'planned'");
++  assert.equal(rows.filter((row) => row.date < '2026-10-07' && row.recipe !== 'Baingan Bharta').length, 0);
++  assert.equal(rows.filter((row) => row.date === '2026-10-06' && row.slot === 'dinner').length, 1);
++  // The manual Baingan Bharta reserved its lot, so it is not planned again.
++  assert.equal(rows.filter((row) => row.recipe === 'Baingan Bharta').length, 1);
++});
++
++test('decideMeal honours cooldown, away days, fasting days and festivals', () => {
++  const database = createDatabase();
++  const names = (date, slot = 'dinner') => decideMeal(loadPlanningContext(database), { date, slot })
++    .map((entry) => entry.recipe.name);
++
++  assert.ok(names('2026-10-08').includes('Bhindi Masala'));
++
++  // Cooked 3 days earlier: inside the 21-day cooldown.
++  database.prepare(`
++    INSERT INTO meal_confirmation_log (recipe_id, cooked_date, user_response, source)
++    VALUES (?, '2026-10-05', 'yes', 'manual')
++  `).run(recipeId(database, 'Bhindi Masala'));
++  assert.ok(!names('2026-10-08').includes('Bhindi Masala'));
++  // Only 'yes' counts for cooldown: a 'no' would not block it.
++  database.prepare("UPDATE meal_confirmation_log SET user_response = 'no'").run();
++  assert.ok(names('2026-10-08').includes('Bhindi Masala'));
++  database.prepare("UPDATE meal_confirmation_log SET user_response = 'yes'").run();
++
++  // A long trip in between does not use up the cooldown window.
++  const cookedDate = '2026-09-10';
++  database.prepare('UPDATE meal_confirmation_log SET cooked_date = ?').run(cookedDate);
++  assert.ok(names('2026-10-08').includes('Bhindi Masala'));       // 28 days later: allowed
++  database.prepare('UPDATE meal_confirmation_log SET cooked_date = ?').run('2026-09-25');
++  assert.ok(!names('2026-10-08').includes('Bhindi Masala'));      // 13 days later: blocked
++  for (let day = 26; day <= 30; day += 1) {
++    database.prepare("INSERT INTO away_log (away_date, reason) VALUES (?, 'vacation')").run(`2026-09-${day}`);
++  }
++  assert.ok(!names('2026-10-18').includes('Bhindi Masala'));      // 23 days raw, 18 counted: still blocked
++
++  // Fasting: veg only and no onion/garlic anywhere in the recipe.
++  database.prepare(`
++    INSERT INTO calendar_date (calendar_date, dietary_restriction) VALUES ('2026-10-09', 'fasting')
++  `).run();
++  const fastingMenu = names('2026-10-09');
++  assert.deepEqual(fastingMenu, ['Mixed Vegetable']);
++
++  // Festival: only that festival's recipes are offered, family favourite first.
++  const diwali = database.prepare("SELECT id FROM festival WHERE name = 'Diwali'").get().id;
++  database.prepare('INSERT INTO festival_recipe (festival_id, recipe_id, family_preference) VALUES (?, ?, 0)')
++    .run(diwali, recipeId(database, 'Aloo Gobi'));
++  database.prepare('INSERT INTO festival_recipe (festival_id, recipe_id, family_preference) VALUES (?, ?, 1)')
++    .run(diwali, recipeId(database, 'Baingan Bharta'));
++  assert.deepEqual(names('2026-10-20'), ['Baingan Bharta', 'Aloo Gobi']);
++});
++
++test('weekends prefer non-veg dishes when there is no festival', () => {
++  const database = createDatabase();
++  const peas = database.prepare("SELECT id FROM item WHERE name = 'Peas'").get().id;
++  const insertedRecipe = database.prepare(`
++    INSERT INTO recipe (name, cuisine, meal_type, is_veg, suitable_for_adult_dinner, approved)
++    VALUES ('Peas Keema', 'Indian', 'sabzi', 0, 1, 1)
++  `).run().lastInsertRowid;
++  database.prepare("INSERT INTO recipe_item (recipe_id, item_id, role) VALUES (?, ?, 'REQUIRED')").run(insertedRecipe, peas);
++  database.prepare(`
++    INSERT INTO inventory (item_id, purchase_date, expiry_date, status)
++    VALUES (?, '2026-10-04', '2026-10-30', 'AVAILABLE')
++  `).run(peas);
++
++  const first = (date) => decideMeal(loadPlanningContext(database), { date, slot: 'dinner' })[0].recipe.name;
++  assert.equal(first('2026-10-10'), 'Peas Keema');   // Saturday
++  assert.notEqual(first('2026-10-07'), 'Peas Keema'); // Wednesday
++});
++
++test('scheduler: weekly generation runs once when due and catches up when missed', async () => {
++  const database = createDatabase();
++  const scheduler = createScheduler({
++    database, sendPushToAll: async () => ({ attempted: 0, sent: 0, failed: 0 }), pushConfigured: false, logger: SILENT_LOGGER,
++  });
++
++  await scheduler.tick(at(4, 17, 59)); // Sunday before 18:00: only the missed current week is made up
++  assert.equal(planRows(database, "p.meal_date >= '2026-10-05'").length, 0);
++
++  await scheduler.tick(at(4, 18, 0));
++  const generated = planRows(database, "p.meal_date >= '2026-10-05'").length;
++  assert.ok(generated > 0);
++  await scheduler.tick(at(4, 18, 5));
++  assert.equal(planRows(database, "p.meal_date >= '2026-10-05'").length, generated);
++  assert.equal(database.prepare("SELECT COUNT(*) AS n FROM scheduler_run_log WHERE job = 'weekly_generation'").get().n, 2);
++});
++
++test('scheduler: evening push, single retry, soak warning and restart safety', async () => {
++  const database = createDatabase();
++  database.prepare("INSERT INTO push_subscriptions (endpoint, p256dh, auth) VALUES ('https://push.example/1', 'k', 'a')").run();
++  // Switch weekly generation off for this scenario by pre-claiming both weeks.
++  ['2026-09-28', '2026-10-05'].forEach((week) => database.prepare(
++    "INSERT INTO scheduler_run_log (job, run_key) VALUES ('weekly_generation', ?)",
++  ).run(week));
++
++  const bhindi = recipeId(database, 'Bhindi Masala');
++  database.prepare('UPDATE recipe SET requires_soak_marination = 1 WHERE id = ?').run(bhindi);
++  database.prepare(`
++    INSERT INTO weekly_meal_plan (recipe_id, meal_date, meal_slot, status) VALUES (?, '2026-10-05', 'dinner', 'planned')
++  `).run(bhindi);
++  database.prepare(`
++    INSERT INTO weekly_meal_plan (recipe_id, meal_date, meal_slot, status) VALUES (?, '2026-10-06', 'dinner', 'planned')
++  `).run(bhindi);
++
++  const sent = [];
++  const sendPushToAll = async (payload) => { sent.push(payload); return { attempted: 1, sent: 1, failed: 0 }; };
++  const build = () => createScheduler({ database, sendPushToAll, pushConfigured: true, logger: SILENT_LOGGER });
++  let scheduler = build();
++
++  await scheduler.tick(at(5, 19, 29));
++  assert.equal(sent.length, 0);
++
++  await scheduler.tick(at(5, 19, 30));
++  assert.equal(sent.length, 1);
++  assert.match(sent[0].body, /Did you cook Bhindi Masala\?/);
++  const today = () => planRows(database, "p.meal_date = '2026-10-05'")[0];
++  assert.ok(today().notifiedAt);
++  assert.equal(planRows(database, "p.meal_date = '2026-10-06'")[0].notifiedAt, null);
++
++  // A restart at 19:45 must not resend.
++  scheduler = build();
++  await scheduler.tick(at(5, 19, 45));
++  assert.equal(sent.length, 1);
++
++  // Soak warning at 20:00 for tomorrow's soaking recipe.
++  await scheduler.tick(at(5, 20, 0));
++  assert.equal(sent.length, 2);
++  assert.match(sent[1].body, /requires soaking/);
++  assert.match(sent[1].body, /Start soaking tonight!/);
++
++  // Retry only after push_retry_hours (3h) since notified_at, and only once.
++  await scheduler.tick(at(5, 22, 0));
++  assert.equal(sent.length, 2);
++  await scheduler.tick(at(5, 22, 31));
++  assert.equal(sent.length, 3);
++  assert.match(sent[2].title, /Still need your answer/);
++  assert.ok(today().retrySentAt);
++  await scheduler.tick(at(5, 23, 30));
++  assert.equal(sent.length, 3);
++});
++
++test('scheduler: no retry for answered rows, no notified_at without subscribers', async () => {
++  const database = createDatabase();
++  ['2026-09-28', '2026-10-05'].forEach((week) => database.prepare(
++    "INSERT INTO scheduler_run_log (job, run_key) VALUES ('weekly_generation', ?)",
++  ).run(week));
++  database.prepare(`
++    INSERT INTO weekly_meal_plan (recipe_id, meal_date, meal_slot, status) VALUES (?, '2026-10-05', 'dinner', 'planned')
++  `).run(recipeId(database, 'Lauki Dal'));
++  const sent = [];
++  const noSubscribers = async (payload) => { sent.push(payload); return { attempted: 0, sent: 0, failed: 0 }; };
++  await createScheduler({ database, sendPushToAll: noSubscribers, pushConfigured: true, logger: SILENT_LOGGER })
++    .tick(at(5, 19, 30));
++  assert.equal(planRows(database)[0].notifiedAt, null);
++
++  database.prepare("UPDATE weekly_meal_plan SET notified_at = '2026-10-05 23:30:00'").run();
++  database.prepare("UPDATE weekly_meal_plan SET status = 'confirmed_skipped'").run();
++  const before = sent.length;
++  await createScheduler({ database, sendPushToAll: noSubscribers, pushConfigured: true, logger: SILENT_LOGGER })
++    .tick(at(6, 12, 0));
++  assert.equal(sent.length, before);
++});
++
++async function withApi(database, run) {
++  const app = express();
++  app.use(express.json());
++  app.use('/api/food', foodRoutes(database));
++  const server = await new Promise((resolve) => { const listening = app.listen(0, () => resolve(listening)); });
++  const base = `http://127.0.0.1:${server.address().port}/api/food`;
++  const call = async (path, body) => {
++    const response = await fetch(`${base}${path}`, body === undefined ? {} : {
++      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
++    });
++    return { status: response.status, body: await response.json() };
++  };
++  try { await run(call); } finally { server.close(); }
++}
++
++test('catch-up: lists unconfirmed past meals and applies cooked / skipped / away', async () => {
++  const database = createDatabase();
++  const insert = database.prepare(`
++    INSERT INTO weekly_meal_plan (recipe_id, meal_date, meal_slot, status) VALUES (?, ?, 'adult_tiffin', 'planned')
++  `);
++  const cooked = insert.run(recipeId(database, 'Bhindi Masala'), '2026-10-01').lastInsertRowid;
++  const skipped = insert.run(recipeId(database, 'Lauki Dal'), '2026-10-02').lastInsertRowid;
++  const away = insert.run(recipeId(database, 'Baingan Bharta'), '2026-10-03').lastInsertRowid;
++  insert.run(recipeId(database, 'Palak Dal'), '2026-09-20'); // older than the 7-day window
++
++  await withApi(database, async (call) => {
++    const dashboard = await call(`/?weekStart=${WEEK_START}&today=2026-10-05`);
++    assert.equal(dashboard.body.catchupLookbackDays, 7);
++    assert.deepEqual(dashboard.body.unconfirmed.map((row) => row.id), [cooked, skipped, away].map(Number));
++
++    const bad = await call('/catchup', { responses: [{ planId: Number(cooked), response: 'eaten' }] });
++    assert.equal(bad.status, 400);
++
++    const saved = await call('/catchup', { responses: [
++      { planId: Number(cooked), response: 'cooked' },
++      { planId: Number(skipped), response: 'skipped' },
++      { planId: Number(away), response: 'away' },
++    ] });
++    assert.equal(saved.status, 200);
++    assert.equal(saved.body.saved, 3);
++    assert.deepEqual(saved.body.consumed.map((entry) => entry.item), ['Bhindi']);
++
++    const statuses = Object.fromEntries(planRows(database, "p.meal_date BETWEEN '2026-10-01' AND '2026-10-03'")
++      .map((row) => [row.recipe, row.status]));
++    assert.deepEqual(statuses, {
++      'Bhindi Masala': 'confirmed_cooked', 'Lauki Dal': 'confirmed_skipped', 'Baingan Bharta': 'confirmed_skipped',
++    });
++    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM inventory WHERE status = 'USED'").get().n, 1);
++    assert.equal(database.prepare('SELECT away_date AS d FROM away_log').get().d, '2026-10-03');
++    assert.equal(database.prepare('SELECT COUNT(*) AS n FROM meal_confirmation_log').get().n, 3);
++
++    const again = await call('/catchup', { responses: [{ planId: Number(cooked), response: 'skipped' }] });
++    assert.equal(again.body.alreadyAnswered, 1);
++    assert.equal(again.body.saved, 0);
++  });
++});
++
++test('past kids/lunch/dinner rows are still assumed cooked when the dashboard loads', async () => {
++  const database = createDatabase();
++  database.prepare(`
++    INSERT INTO weekly_meal_plan (recipe_id, meal_date, meal_slot, status) VALUES (?, '2026-10-02', 'dinner', 'planned')
++  `).run(recipeId(database, 'Bhindi Masala'));
++  await withApi(database, async (call) => {
++    const dashboard = await call(`/?weekStart=${WEEK_START}&today=2026-10-05`);
++    assert.equal(dashboard.body.unconfirmed.length, 0);
++    assert.equal(planRows(database, "p.meal_date = '2026-10-02'")[0].status, 'confirmed_cooked');
++    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM inventory WHERE status = 'USED'").get().n, 1);
++  });
++});
++
++test('generate + inventory endpoints', async () => {
++  const database = createDatabase();
++  await withApi(database, async (call) => {
++    assert.equal((await call('/plan/generate', { weekStart: '2026-10-06' })).status, 400); // not a Monday
++    const generated = await call('/plan/generate', { weekStart: WEEK_START, today: '2026-10-05' });
++    assert.equal(generated.status, 201);
++    assert.ok(generated.body.created > 0);
++
++    const available = await call('/inventory?today=2026-10-05');
++    assert.equal(available.status, 200);
++    assert.ok(available.body.lots.length >= 7);
++    assert.ok(available.body.lots.every((lot) => lot.status === 'AVAILABLE'));
++    const bhindi = available.body.lots.find((lot) => lot.item_name === 'Bhindi' && lot.purchase_date === '2026-09-22');
++    assert.equal(bhindi.freshness, 'Old');
++    assert.equal(available.body.lots[0].expiry_date <= available.body.lots.at(-1).expiry_date, true);
++
++    assert.equal((await call('/inventory?status=BOGUS')).status, 400);
++    assert.equal((await call('/inventory?status=USED')).body.lots.length, 0);
++    assert.equal((await call('/inventory?status=all')).body.lots.length, available.body.lots.length);
++  });
++});
+diff --git a/frontend/src/App.jsx b/frontend/src/App.jsx
+index f36c2d0..c1c5f34 100755
+--- a/frontend/src/App.jsx
++++ b/frontend/src/App.jsx
+@@ -50,6 +50,7 @@ function AppContent() {
+           <Route element={<ProtectedRoute />}>
+             <Route path="/" element={<HomePage />} />
+             <Route path="/settings" element={<HomePage />} />
++            <Route path="/inventory" element={<HomePage />} />
+             <Route path="*" element={<Navigate to="/" replace />} />
+           </Route>
+         </Routes>
+diff --git a/frontend/src/components/AttentionCard.jsx b/frontend/src/components/AttentionCard.jsx
+new file mode 100644
+index 0000000..b077dcc
+--- /dev/null
++++ b/frontend/src/components/AttentionCard.jsx
+@@ -0,0 +1,33 @@
++import { Alert, Box, Button } from '@mui/material';
++import { formatDay } from '../utils/formatDay';
++
++// Home-screen "morning summary" (spec 6.4 step 4). It is built from the app's
++// own data, not from push delivery, so unanswered items can never silently
++// fall through even when a notification is lost.
++export default function AttentionCard({ unconfirmed, lookbackDays, pendingPurchaseCount, onReview, onConfirmPurchases }) {
++  const days = [...new Set(unconfirmed.map((meal) => meal.meal_date))];
++  if (days.length === 0 && pendingPurchaseCount === 0) return null;
++
++  return (
++    <Box sx={{ display: 'grid', gap: 1, mb: 2 }} aria-label="Needs your attention">
++      {days.length > 0 && (
++        <Alert
++          severity="warning"
++          action={<Button color="inherit" size="small" onClick={onReview}>Review</Button>}
++        >
++          {unconfirmed.length} {unconfirmed.length === 1 ? 'meal' : 'meals'} from the last {lookbackDays} days
++          {' '}still {unconfirmed.length === 1 ? 'needs' : 'need'} an answer ({days.map(formatDay).join(', ')}).
++        </Alert>
++      )}
++      {pendingPurchaseCount > 0 && (
++        <Alert
++          severity="info"
++          action={<Button color="inherit" size="small" onClick={onConfirmPurchases}>Confirm</Button>}
++        >
++          {pendingPurchaseCount} {pendingPurchaseCount === 1 ? 'vegetable is' : 'vegetables are'} on the
++          grocery list waiting for purchase confirmation.
++        </Alert>
++      )}
++    </Box>
++  );
++}
+diff --git a/frontend/src/components/CatchUpDialog.jsx b/frontend/src/components/CatchUpDialog.jsx
+new file mode 100644
+index 0000000..24ecc3f
+--- /dev/null
++++ b/frontend/src/components/CatchUpDialog.jsx
+@@ -0,0 +1,118 @@
++import { useState } from 'react';
++import {
++  Box,
++  Button,
++  Dialog,
++  DialogActions,
++  DialogContent,
++  DialogTitle,
++  Divider,
++  ToggleButton,
++  ToggleButtonGroup,
++  Typography,
++} from '@mui/material';
++import { formatDay } from '../utils/formatDay';
++
++const CHOICES = [
++  { value: 'cooked', label: 'Cooked', color: 'success' },
++  { value: 'skipped', label: 'Skipped', color: 'error' },
++  { value: 'away', label: 'Away', color: 'info' },
++];
++const SLOT_LABELS = {
++  kids_tiffin: 'Kids tiffin',
++  adult_tiffin: 'Adult tiffin',
++  weekend_lunch: 'Lunch',
++  dinner: 'Dinner',
++};
++
++function mealName(meal) {
++  const slot = SLOT_LABELS[meal.meal_slot] || meal.meal_slot;
++  return meal.tiffin_kid_slot ? `${slot} (${meal.tiffin_kid_slot})` : slot;
++}
++
++// "You haven't confirmed the last N days - what happened?" (spec 6.4 step 3).
++// Answers write to the same meal log as the push flow.
++export default function CatchUpDialog({ meals, saving, onClose, onSubmit }) {
++  const [choices, setChoices] = useState({});
++  const days = [...new Set(meals.map((meal) => meal.meal_date))];
++  const answeredCount = Object.keys(choices).length;
++
++  const setChoice = (planId, choice) => setChoices((current) => {
++    const next = { ...current };
++    if (choice) next[planId] = choice;
++    else delete next[planId];
++    return next;
++  });
++  const setAll = (choice) => setChoices(Object.fromEntries(meals.map((meal) => [meal.id, choice])));
++
++  const submit = () => onSubmit(
++    Object.entries(choices).map(([planId, response]) => ({ planId: Number(planId), response })),
++  );
++
++  return (
++    <Dialog open onClose={onClose} fullWidth maxWidth="xs" scroll="paper">
++      <DialogTitle>
++        You haven&apos;t confirmed the last {days.length} {days.length === 1 ? 'day' : 'days'} — what happened?
++      </DialogTitle>
++      <DialogContent dividers>
++        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 1 }}>
++          <Typography variant="caption" color="text.secondary">Set all:</Typography>
++          {CHOICES.map((choice) => (
++            <Button
++              key={choice.value}
++              size="small"
++              color={choice.color}
++              variant="outlined"
++              onClick={() => setAll(choice.value)}
++              sx={{ textTransform: 'none', minWidth: 0 }}
++            >
++              {choice.label}
++            </Button>
++          ))}
++        </Box>
++        {days.map((day) => (
++          <Box key={day} sx={{ mt: 1.5 }}>
++            <Typography variant="subtitle2" fontWeight={700}>{formatDay(day)}</Typography>
++            <Divider sx={{ mb: 0.5 }} />
++            {meals.filter((meal) => meal.meal_date === day).map((meal) => (
++              <Box key={meal.id} sx={{ py: 0.75 }}>
++                <Typography variant="body2">
++                  {meal.recipe_name} <Typography component="span" variant="caption" color="text.secondary">· {mealName(meal)}</Typography>
++                </Typography>
++                <ToggleButtonGroup
++                  exclusive
++                  size="small"
++                  value={choices[meal.id] ?? null}
++                  onChange={(_event, next) => setChoice(meal.id, next)}
++                  aria-label={`What happened to ${meal.recipe_name} on ${formatDay(day)}`}
++                  sx={{ mt: 0.5 }}
++                >
++                  {CHOICES.map((choice) => (
++                    <ToggleButton
++                      key={choice.value}
++                      value={choice.value}
++                      color={choice.color}
++                      sx={{ textTransform: 'none', px: 1.5, py: 0.25 }}
++                    >
++                      {choice.label}
++                    </ToggleButton>
++                  ))}
++                </ToggleButtonGroup>
++              </Box>
++            ))}
++          </Box>
++        ))}
++        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2 }}>
++          Cooked uses up the ingredients. Skipped and Away leave inventory alone; Away also
++          excludes that day when the planner avoids repeats.
++        </Typography>
++      </DialogContent>
++      <DialogActions sx={{ px: 3, py: 1.5 }}>
++        <Button onClick={onClose}>Later</Button>
++        <Button variant="contained" onClick={submit} disabled={saving || answeredCount === 0}>
++          Save {answeredCount > 0 ? `(${answeredCount})` : ''}
++        </Button>
++      </DialogActions>
++    </Dialog>
++  );
++}
+diff --git a/frontend/src/components/InventoryPage.jsx b/frontend/src/components/InventoryPage.jsx
+new file mode 100644
+index 0000000..25c802e
+--- /dev/null
++++ b/frontend/src/components/InventoryPage.jsx
+@@ -0,0 +1,146 @@
++import { useEffect, useState } from 'react';
++import {
++  Alert,
++  Box,
++  Button,
++  Card,
++  Chip,
++  CircularProgress,
++  Table,
++  TableBody,
++  TableCell,
++  TableContainer,
++  TableHead,
++  TableRow,
++  ToggleButton,
++  ToggleButtonGroup,
++  Typography,
++} from '@mui/material';
++import ArrowBackIcon from '@mui/icons-material/ArrowBack';
++import { useNavigate } from 'react-router-dom';
++import { api } from '../services/api';
++
++const STATUS_FILTERS = [
++  { value: 'AVAILABLE', label: 'Available' },
++  { value: 'USED', label: 'Used' },
++  { value: 'DISCARDED', label: 'Discarded' },
++  { value: 'ALL', label: 'All' },
++];
++const FRESHNESS_COLORS = { Fresh: 'success', 'Use soon': 'warning', Old: 'error' };
++
++function localDate(date) {
++  const month = String(date.getMonth() + 1).padStart(2, '0');
++  const day = String(date.getDate()).padStart(2, '0');
++  return `${date.getFullYear()}-${month}-${day}`;
++}
++
++function formatDate(value) {
++  if (!value) return '—';
++  return new Date(`${value}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
++}
++
++function expiryText(lot) {
++  if (lot.days_until_expiry === null) return formatDate(lot.expiry_date);
++  if (lot.days_until_expiry < 0) return `${formatDate(lot.expiry_date)} (${-lot.days_until_expiry}d ago)`;
++  if (lot.days_until_expiry === 0) return `${formatDate(lot.expiry_date)} (today)`;
++  return `${formatDate(lot.expiry_date)} (in ${lot.days_until_expiry}d)`;
++}
++
++// "Show Current Inventory": rows straight from the inventory table, one row
++// per purchase lot (two Bhindi purchases stay two rows).
++export default function InventoryPage() {
++  const navigate = useNavigate();
++  const [status, setStatus] = useState('AVAILABLE');
++  const [loaded, setLoaded] = useState({ status: null, lots: [], error: '' });
++
++  useEffect(() => {
++    let isCurrentRequest = true;
++    api.get(`/food/inventory?status=${status}&today=${encodeURIComponent(localDate(new Date()))}`)
++      .then(({ data }) => {
++        if (isCurrentRequest) setLoaded({ status, lots: data.lots, error: '' });
++      })
++      .catch((error) => {
++        if (isCurrentRequest) {
++          setLoaded({ status, lots: [], error: error.message || 'Could not load the inventory.' });
++        }
++      });
++    return () => {
++      isCurrentRequest = false;
++    };
++  }, [status]);
++
++  const isLoading = loaded.status !== status;
++  const showFreshness = status === 'AVAILABLE';
++
++  return (
++    <Box sx={{ maxWidth: 900, mx: 'auto', display: 'grid', gap: 2 }}>
++      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap' }}>
++        <Typography variant="h4">Current inventory</Typography>
++        <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/settings')}>
++          Back to menu
++        </Button>
++      </Box>
++
++      <ToggleButtonGroup
++        exclusive
++        size="small"
++        value={status}
++        onChange={(_event, next) => next && setStatus(next)}
++        aria-label="Inventory status filter"
++        sx={{ flexWrap: 'wrap' }}
++      >
++        {STATUS_FILTERS.map((filter) => (
++          <ToggleButton key={filter.value} value={filter.value} sx={{ textTransform: 'none', px: 2 }}>
++            {filter.label}
++          </ToggleButton>
++        ))}
++      </ToggleButtonGroup>
++
++      {loaded.error && !isLoading && <Alert severity="error">{loaded.error}</Alert>}
++      {isLoading && <CircularProgress size={24} />}
++
++      {!isLoading && !loaded.error && (
++        <Card>
++          {loaded.lots.length === 0 ? (
++            <Typography color="text.secondary" sx={{ p: 2 }}>
++              No {status === 'ALL' ? '' : `${status.toLowerCase()} `}inventory lots.
++            </Typography>
++          ) : (
++            <TableContainer>
++              <Table size="small" aria-label="Inventory lots">
++                <TableHead>
++                  <TableRow>
++                    <TableCell>Item</TableCell>
++                    <TableCell>Purchased</TableCell>
++                    <TableCell>{status === 'USED' ? 'Used' : 'Expires'}</TableCell>
++                    <TableCell>Store</TableCell>
++                    <TableCell>{showFreshness ? 'Freshness' : 'Status'}</TableCell>
++                  </TableRow>
++                </TableHead>
++                <TableBody>
++                  {loaded.lots.map((lot) => (
++                    <TableRow key={lot.id}>
++                      <TableCell sx={{ fontWeight: 600 }}>{lot.item_name}</TableCell>
++                      <TableCell>{formatDate(lot.purchase_date)}</TableCell>
++                      <TableCell>
++                        {status === 'USED' ? formatDate(lot.used_date) : expiryText(lot)}
++                      </TableCell>
++                      <TableCell>{lot.store || '—'}</TableCell>
++                      <TableCell>
++                        {lot.freshness && showFreshness ? (
++                          <Chip size="small" color={FRESHNESS_COLORS[lot.freshness]} label={lot.freshness} />
++                        ) : (
++                          <Chip size="small" variant="outlined" label={lot.status.toLowerCase()} />
++                        )}
++                      </TableCell>
++                    </TableRow>
++                  ))}
++                </TableBody>
++              </Table>
++            </TableContainer>
++          )}
++        </Card>
++      )}
++    </Box>
++  );
++}
+diff --git a/frontend/src/components/PlannerSettingsPage.jsx b/frontend/src/components/PlannerSettingsPage.jsx
+index 6c1b56e..540b8d9 100644
+--- a/frontend/src/components/PlannerSettingsPage.jsx
++++ b/frontend/src/components/PlannerSettingsPage.jsx
+@@ -8,21 +8,30 @@ import {
+   FormControl,
+   FormControlLabel,
+   FormLabel,
++  List,
++  ListItemButton,
++  ListItemIcon,
++  ListItemText,
+   Radio,
+   RadioGroup,
+   Typography,
+ } from '@mui/material';
++import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
++import ChevronRightIcon from '@mui/icons-material/ChevronRight';
++import Inventory2OutlinedIcon from '@mui/icons-material/Inventory2Outlined';
+ import LogoutIcon from '@mui/icons-material/Logout';
+ import { useNavigate } from 'react-router-dom';
+ import { ColorModeContext } from '../theme';
+ import { useAuth } from '../context/useAuth';
+ import PushNotificationSettings from './PushNotificationSettings';
+ 
+-export default function PlannerSettingsPage() {
++export default function PlannerSettingsPage({ onGeneratePlan }) {
+   const { preference, setColorMode } = useContext(ColorModeContext);
+   const { logout } = useAuth();
+   const navigate = useNavigate();
+   const [error, setError] = useState('');
++  const [planMessage, setPlanMessage] = useState('');
++  const [generating, setGenerating] = useState(false);
+ 
+   const signOut = async () => {
+     setError('');
+@@ -34,10 +43,55 @@ export default function PlannerSettingsPage() {
+     }
+   };
+ 
++  const generatePlan = async () => {
++    setError('');
++    setPlanMessage('');
++    setGenerating(true);
++    try {
++      const result = await onGeneratePlan();
++      setPlanMessage(
++        `Added ${result.created} planned ${result.created === 1 ? 'meal' : 'meals'}`
++        + `${result.alreadyPlanned ? `; ${result.alreadyPlanned} slots already had a plan` : ''}`
++        + `${result.unfilled.length ? `; ${result.unfilled.length} slots have no recipe that fits the current inventory` : ''}.`,
++      );
++    } catch (generateError) {
++      setError(generateError.message || 'Could not generate the weekly plan.');
++    } finally {
++      setGenerating(false);
++    }
++  };
++
+   return (
+     <Box sx={{ maxWidth: 720, mx: 'auto', display: 'grid', gap: 2 }}>
+       <Typography variant="h4">Menu</Typography>
+       {error && <Alert severity="error">{error}</Alert>}
++      <Card>
++        <List disablePadding>
++          <ListItemButton onClick={() => navigate('/inventory')}>
++            <ListItemIcon><Inventory2OutlinedIcon /></ListItemIcon>
++            <ListItemText primary="Show Current Inventory" secondary="Purchased vegetables and their freshness" />
++            <ChevronRightIcon />
++          </ListItemButton>
++        </List>
++      </Card>
++      <Card>
++        <CardContent>
++          <Typography variant="h6" gutterBottom>Weekly meal plan</Typography>
++          <Typography color="text.secondary" sx={{ mb: 2 }}>
++            The plan is generated automatically each Sunday evening for the week ahead.
++            Use this to fill this week&apos;s empty slots now; meals already planned are never changed.
++          </Typography>
++          <Button
++            variant="contained"
++            startIcon={<AutoAwesomeOutlinedIcon />}
++            onClick={generatePlan}
++            disabled={generating}
++          >
++            {generating ? 'Generating…' : 'Generate this week'}
++          </Button>
++          {planMessage && <Alert severity="success" sx={{ mt: 2 }}>{planMessage}</Alert>}
++        </CardContent>
++      </Card>
+       <PushNotificationSettings />
+       <Card>
+         <CardContent>
+diff --git a/frontend/src/components/RecipePlannerPage.jsx b/frontend/src/components/RecipePlannerPage.jsx
+index 4dd615c..0a3bfe2 100644
+--- a/frontend/src/components/RecipePlannerPage.jsx
++++ b/frontend/src/components/RecipePlannerPage.jsx
+@@ -18,6 +18,7 @@ import {
+   IconButton,
+   Menu,
+   MenuItem,
++  Snackbar,
+   TextField,
+   Typography,
+   useTheme,
+@@ -28,9 +29,12 @@ import RestaurantMenuOutlinedIcon from '@mui/icons-material/RestaurantMenuOutlin
+ import { useLocation } from 'react-router-dom';
+ import { tokens } from '../theme';
+ import { api } from '../services/api';
+-import BottomNav from '../scenes/global/BottomNav';
++import BottomNav, { BOTTOM_NAV_HEIGHT } from '../scenes/global/BottomNav';
+ import PlannerSettingsPage from './PlannerSettingsPage';
+ import PlannerTopbar from './PlannerTopbar';
++import InventoryPage from './InventoryPage';
++import CatchUpDialog from './CatchUpDialog';
++import AttentionCard from './AttentionCard';
+ 
+ const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+ const MEALS = ['Kids Tiffin', 'Lunch', 'Dinner'];
+@@ -179,7 +183,7 @@ export default function RecipePlannerPage() {
+   const location = useLocation();
+   const theme = useTheme();
+   const colors = tokens(theme.palette.mode);
+-  const isSettingsPage = location.pathname === '/settings';
++  const view = location.pathname === '/settings' ? 'settings' : location.pathname === '/inventory' ? 'inventory' : 'home';
+   const weekStart = useMemo(() => getMonday(new Date()), []);
+   const [dashboard, setDashboard] = useState(null);
+   const [loading, setLoading] = useState(true);
+@@ -197,6 +201,9 @@ export default function RecipePlannerPage() {
+   const [purchaseDate, setPurchaseDate] = useState(localDate(new Date()));
+   const [store, setStore] = useState('');
+   const [receiptPhoto, setReceiptPhoto] = useState(null);
++  const [notice, setNotice] = useState('');
++  // 'auto' opens the catch-up prompt on app open; 'closed' after Later/Save.
++  const [catchUpMode, setCatchUpMode] = useState('auto');
+   const photoInputRef = useRef(null);
+ 
+   useEffect(() => () => {
+@@ -244,6 +251,20 @@ export default function RecipePlannerPage() {
+   }, [fetchDashboard]);
+ 
+   const closeAddMenu = () => setAddMenuAnchor(null);
++  const pendingPurchaseCount = dashboard?.groceryStage.length ?? 0;
++  const unconfirmedMeals = dashboard?.unconfirmed || [];
++  const catchUpOpen = view === 'home'
++    && unconfirmedMeals.length > 0
++    && (catchUpMode === 'open' || catchUpMode === 'auto');
++
++  // Mirror "needs attention" on the installed app's home-screen icon where the
++  // browser supports it (a no-op elsewhere).
++  const attentionCount = pendingPurchaseCount + unconfirmedMeals.length;
++  useEffect(() => {
++    if (!dashboard || !('setAppBadge' in navigator)) return;
++    const update = attentionCount > 0 ? navigator.setAppBadge(attentionCount) : navigator.clearAppBadge();
++    update?.catch(() => {});
++  }, [dashboard, attentionCount]);
+   const recommendations = dashboard?.recommendations || [];
+   const selectedRecipes = recommendations.filter((recipe) => {
+     if (recipeMeal === 'kids_tiffin') return recipe.suitableForKidsTiffin;
+@@ -325,6 +346,34 @@ export default function RecipePlannerPage() {
+     }
+   };
+ 
++  const submitCatchUp = async (responses) => {
++    setSaving(true);
++    try {
++      await api.post('/food/catchup', { responses });
++      setCatchUpMode('closed');
++      await refreshDashboard();
++    } catch (error) {
++      setPageError(error.message || 'Could not save the catch-up answers.');
++    } finally {
++      setSaving(false);
++    }
++  };
++
++  const generatePlan = async () => {
++    const { data } = await api.post('/food/plan/generate', { weekStart, today: localDate(new Date()) });
++    await refreshDashboard();
++    return data;
++  };
++
++  // The Confirm icon only has work to do while groceries are waiting.
++  const handleConfirmClick = () => {
++    if (pendingPurchaseCount === 0) {
++      setNotice('Nothing is waiting to be confirmed. Add vegetables to the grocery list first.');
++      return;
++    }
++    openPurchaseDialog();
++  };
++
+   const planDalSide = async (suggestedRecipeId, mealDate) => {
+     setSaving(true);
+     try {
+@@ -357,7 +406,7 @@ export default function RecipePlannerPage() {
+         if (!meals[label]) meals[label] = [];
+         meals[label].push({
+           id: entry.id,
+-          name: entry.recipe_name,
++          name: entry.tiffin_kid_slot ? `${entry.recipe_name} (${entry.tiffin_kid_slot})` : entry.recipe_name,
+           status: entry.status,
+         });
+       });
+@@ -395,20 +444,6 @@ export default function RecipePlannerPage() {
+           <RestaurantMenuOutlinedIcon fontSize="small" sx={{ mr: 1.5 }} />
+           Add approved recipe to plan
+         </MenuItem>
+-        <MenuItem onClick={() => {
+-          closeAddMenu();
+-          setGroceryDialogOpen(true);
+-        }}>
+-          Add fresh vegetables to grocery list
+-        </MenuItem>
+-        {dashboard?.groceryStage.length > 0 && (
+-          <MenuItem onClick={() => {
+-            closeAddMenu();
+-            openPurchaseDialog();
+-          }}>
+-            Confirm purchased vegetables
+-          </MenuItem>
+-        )}
+         <MenuItem onClick={() => {
+           closeAddMenu();
+           photoInputRef.current?.click();
+@@ -429,9 +464,18 @@ export default function RecipePlannerPage() {
+       <Box sx={{ maxWidth: 1200, mx: 'auto', px: { xs: 2, sm: 3 }, pt: 9, pb: 12 }}>
+         {pageError && <Alert severity="error" onClose={() => setPageError('')} sx={{ mb: 2 }}>{pageError}</Alert>}
+         {loading && <CircularProgress size={24} sx={{ mb: 2 }} />}
+-        {isSettingsPage ? (
+-          <PlannerSettingsPage />
+-        ) : (
++        {view === 'settings' && <PlannerSettingsPage onGeneratePlan={generatePlan} />}
++        {view === 'inventory' && <InventoryPage />}
++        {view === 'home' && (
++          <AttentionCard
++            unconfirmed={unconfirmedMeals}
++            lookbackDays={dashboard?.catchupLookbackDays}
++            pendingPurchaseCount={pendingPurchaseCount}
++            onReview={() => setCatchUpMode('open')}
++            onConfirmPurchases={openPurchaseDialog}
++          />
++        )}
++        {view === 'home' && (
+           <Grid container spacing={2}>
+             {WEEKDAYS.map((day, index) => (
+               <Grid key={day} size={{ xs: 12, sm: 6, lg: 4 }}>
+@@ -605,7 +649,29 @@ export default function RecipePlannerPage() {
+           <Button onClick={() => setReceiptPhoto(null)}>Close</Button>
+         </DialogActions>
+       </Dialog>
+-      <BottomNav onAddClick={(event) => setAddMenuAnchor(event.currentTarget)} />
++      {catchUpOpen && (
++        <CatchUpDialog
++          meals={unconfirmedMeals}
++          saving={saving}
++          onClose={() => setCatchUpMode('closed')}
++          onSubmit={submitCatchUp}
++        />
++      )}
++      <Snackbar
++        open={Boolean(notice)}
++        autoHideDuration={4000}
++        onClose={() => setNotice('')}
++        message={notice}
++        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
++        sx={{ mb: `calc(${BOTTOM_NAV_HEIGHT}px + env(safe-area-inset-bottom))` }}
++      />
++      <BottomNav
++        onAddClick={(event) => setAddMenuAnchor(event.currentTarget)}
++        onGroceriesClick={() => setGroceryDialogOpen(true)}
++        onConfirmClick={handleConfirmClick}
++        pendingPurchaseCount={pendingPurchaseCount}
++        unconfirmedMealCount={unconfirmedMeals.length}
++      />
+     </Box>
+   );
+ }
+diff --git a/frontend/src/scenes/global/BottomNav.jsx b/frontend/src/scenes/global/BottomNav.jsx
+index c835b2e..388facc 100644
+--- a/frontend/src/scenes/global/BottomNav.jsx
++++ b/frontend/src/scenes/global/BottomNav.jsx
+@@ -1,23 +1,42 @@
+-import { BottomNavigation, BottomNavigationAction, Paper, useTheme } from '@mui/material';
++import { Badge, BottomNavigation, BottomNavigationAction, Paper, useTheme } from '@mui/material';
+ import AddIcon from '@mui/icons-material/Add';
++import AddShoppingCartOutlinedIcon from '@mui/icons-material/AddShoppingCartOutlined';
++import FactCheckOutlinedIcon from '@mui/icons-material/FactCheckOutlined';
++import HomeOutlinedIcon from '@mui/icons-material/HomeOutlined';
+ import MenuOutlinedIcon from '@mui/icons-material/MenuOutlined';
+ import { useLocation, useNavigate } from 'react-router-dom';
+ import { tokens } from '../../theme';
+ 
+ export const BOTTOM_NAV_HEIGHT = 56;
+ 
+-export default function BottomNav({ onAddClick }) {
++// Pages that live under the hamburger Menu keep "Menu" highlighted.
++const MENU_PATHS = ['/settings', '/inventory'];
++
++/**
++ * Bottom bar: Home | Add | Groceries | Confirm | Menu.
++ * Home and Menu are pages (they highlight). Add, Groceries and Confirm open
++ * dialogs, so they never stay highlighted.
++ *
++ * - pendingPurchaseCount: grocery items waiting for purchase confirmation.
++ *   The Confirm icon shows this as a badge; when it reaches 0 the badge
++ *   disappears, which is how the bar tells you something needs attention.
++ * - unconfirmedMealCount: past meals nobody has answered yet (badge on Home).
++ */
++export default function BottomNav({
++  onAddClick,
++  onGroceriesClick,
++  onConfirmClick,
++  pendingPurchaseCount = 0,
++  unconfirmedMealCount = 0,
++}) {
+   const theme = useTheme();
+   const colors = tokens(theme.palette.mode);
+   const location = useLocation();
+   const navigate = useNavigate();
+-  const value = location.pathname === '/settings' ? 'settings' : 'add';
+ 
+-  const handleChange = (_event, selected) => {
+-    if (selected === 'settings') {
+-      navigate('/settings');
+-    }
+-  };
++  let value = false;
++  if (location.pathname === '/') value = 'home';
++  else if (MENU_PATHS.includes(location.pathname)) value = 'menu';
+ 
+   return (
+     <Paper
+@@ -35,15 +54,26 @@ export default function BottomNav({ onAddClick }) {
+     >
+       <BottomNavigation
+         value={value}
+-        onChange={handleChange}
+         showLabels
+         sx={{
+           height: BOTTOM_NAV_HEIGHT,
+           bgcolor: colors.primary[400],
+-          '& .MuiBottomNavigationAction-root': { color: colors.grey[500] },
++          // Five actions must fit a 360px phone; MUI's default 80px minimum would not.
++          '& .MuiBottomNavigationAction-root': { color: colors.grey[500], minWidth: 0, px: 0.5 },
+           '& .Mui-selected': { color: colors.greenAccent[600] },
+         }}
+       >
++        <BottomNavigationAction
++          value="home"
++          label="Home"
++          aria-label={unconfirmedMealCount > 0 ? `Home, ${unconfirmedMealCount} meals to confirm` : 'Home'}
++          icon={(
++            <Badge color="warning" badgeContent={unconfirmedMealCount} max={9}>
++              <HomeOutlinedIcon />
++            </Badge>
++          )}
++          onClick={() => navigate('/')}
++        />
+         <BottomNavigationAction
+           value="add"
+           label="Add"
+@@ -51,9 +81,27 @@ export default function BottomNav({ onAddClick }) {
+           onClick={onAddClick}
+         />
+         <BottomNavigationAction
+-          value="settings"
++          value="groceries"
++          label="Groceries"
++          icon={<AddShoppingCartOutlinedIcon />}
++          onClick={onGroceriesClick}
++        />
++        <BottomNavigationAction
++          value="confirm"
++          label="Confirm"
++          aria-label={pendingPurchaseCount > 0 ? `Confirm purchases, ${pendingPurchaseCount} waiting` : 'Confirm purchases'}
++          icon={(
++            <Badge color="error" badgeContent={pendingPurchaseCount} max={9}>
++              <FactCheckOutlinedIcon />
++            </Badge>
++          )}
++          onClick={onConfirmClick}
++        />
++        <BottomNavigationAction
++          value="menu"
+           label="Menu"
+           icon={<MenuOutlinedIcon />}
++          onClick={() => navigate('/settings')}
+         />
+       </BottomNavigation>
+     </Paper>
+diff --git a/frontend/src/utils/formatDay.js b/frontend/src/utils/formatDay.js
+new file mode 100644
+index 0000000..df943a8
+--- /dev/null
++++ b/frontend/src/utils/formatDay.js
+@@ -0,0 +1,8 @@
++// "Mon, Oct 5" for a 'YYYY-MM-DD' plan date, in the viewer's locale.
++export function formatDay(date) {
++  return new Date(`${date}T00:00:00`).toLocaleDateString(undefined, {
++    weekday: 'short',
++    month: 'short',
++    day: 'numeric',
++  });
++}
+diff --git a/public/service-worker.js b/public/service-worker.js
+index 6b1e4ec..b643299 100644
+--- a/public/service-worker.js
++++ b/public/service-worker.js
+@@ -91,6 +91,10 @@ self.addEventListener('push', (event) => {
+     body: data.body || 'You have a new notification.',
+     icon: '/food-app-icon-192.png',
+     badge: '/food-app-icon-192.png',
++    // A retry push reuses the tag, so it replaces the first notification
++    // (and alerts again) instead of stacking a duplicate.
++    tag: data.tag || undefined,
++    renotify: Boolean(data.tag),
+     data: { url: data.url || '/' },
+   }));
+ });
+ 

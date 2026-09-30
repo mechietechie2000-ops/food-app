@@ -245,5 +245,18 @@ CREATE TABLE IF NOT EXISTS away_log (
 );
 CREATE INDEX IF NOT EXISTS idx_away_log_date ON away_log(away_date);
 
+-- ============================================================
+-- SCHEDULER RUN LOG (one row per job run; the unique key makes each
+-- scheduled job fire at most once per run_key, so a server restart can
+-- never resend a push or regenerate a week twice)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS scheduler_run_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job TEXT NOT NULL,
+    run_key TEXT NOT NULL,
+    ran_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (job, run_key)
+);
+
 -- Future tables intentionally excluded from this first cut:
 -- receipt parsing tables, per-user preferences, quantity/partial-consumption tracking.

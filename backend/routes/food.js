@@ -1,4 +1,14 @@
 const express = require('express');
+const { rules } = require('../services/rules');
+const { isDate, dateOffset, isMonday, localDateString } = require('../services/dates');
+const { generateWeek } = require('../services/mealPlanner');
+const {
+  RESPONSE,
+  applyMealResponse,
+  getUnconfirmedMeals,
+  isValidCatchUpBody,
+  applyCatchUpResponses,
+} = require('../services/mealResponses');
 
 const WEEK_DAYS = 7;
 const DAY_MILLISECONDS = 86400000;
@@ -6,19 +16,8 @@ const DAL_INTERVAL_DAYS = 2;
 const FRESHNESS_SOON_DAYS = 2;
 const MEAL_SLOTS = new Set(['kids_tiffin', 'adult_tiffin', 'dinner', 'weekend_lunch']);
 const AUTO_COOK_MEAL_SLOTS = ['kids_tiffin', 'dinner', 'weekend_lunch'];
-
-function isDate(value) {
-  return typeof value === 'string'
-    && /^\d{4}-\d{2}-\d{2}$/.test(value)
-    && !Number.isNaN(Date.parse(`${value}T00:00:00Z`))
-    && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
-}
-
-function dateOffset(date, days) {
-  const value = new Date(`${date}T00:00:00Z`);
-  value.setUTCDate(value.getUTCDate() + days);
-  return value.toISOString().slice(0, 10);
-}
+const INVENTORY_STATUS_FILTERS = new Set(['AVAILABLE', 'USED', 'DISCARDED', 'ALL']);
+const INVENTORY_ROW_LIMIT = 500;
 
 function integerList(values) {
   return Array.isArray(values)
@@ -50,42 +49,11 @@ function getDalSuggestions(database, weekStart) {
     });
 }
 
+// A past kids-tiffin / lunch / dinner row nobody marked Skipped is assumed
+// cooked (see README). Uses the same path as the buttons so inventory and the
+// meal log always agree.
 function confirmCookedPlan(database, plan) {
-  const updated = database.prepare(`
-    UPDATE weekly_meal_plan
-    SET status = 'confirmed_cooked'
-    WHERE id = ? AND status = 'planned'
-  `).run(plan.id);
-  if (updated.changes !== 1) return;
-
-  database.prepare(`
-    INSERT INTO meal_confirmation_log
-      (plan_id, recipe_id, cooked_date, user_response, source, notes)
-    VALUES (?, ?, ?, 'yes', 'manual', ?)
-  `).run(plan.id, plan.recipe_id, plan.meal_date, 'Assumed cooked: no skip was recorded.');
-
-  const requiredFresh = database.prepare(`
-    SELECT i.id
-    FROM recipe_item ri
-    JOIN item i ON i.id = ri.item_id
-    WHERE ri.recipe_id = ? AND ri.role = 'REQUIRED'
-      AND i.inventory_type = 'FRESH'
-  `).all(plan.recipe_id);
-  const findOldestLot = database.prepare(`
-    SELECT id
-    FROM inventory
-    WHERE item_id = ? AND status = 'AVAILABLE'
-    ORDER BY purchase_date, id
-    LIMIT 1
-  `);
-  const markUsed = database.prepare(`
-    UPDATE inventory SET status = 'USED', used_date = ?
-    WHERE id = ? AND status = 'AVAILABLE'
-  `);
-  requiredFresh.forEach((item) => {
-    const lot = findOldestLot.get(item.id);
-    if (lot) markUsed.run(plan.meal_date, lot.id);
-  });
+  applyMealResponse(database, plan, RESPONSE.YES, { notes: 'Assumed cooked: no skip was recorded.' });
 }
 
 function finalizePastMeals(database, today) {
@@ -194,7 +162,7 @@ function createFoodRouter(database) {
       || first.name.localeCompare(second.name));
   }
 
-  function getDashboard(weekStart) {
+  function getDashboard(weekStart, today) {
     const weekEnd = dateOffset(weekStart, WEEK_DAYS - 1);
     return {
       weekStart,
@@ -232,12 +200,15 @@ function createFoodRouter(database) {
       dalSuggestions: getDalSuggestions(database, weekStart),
       plan: database.prepare(`
         SELECT p.id, p.recipe_id, r.name AS recipe_name, r.description, r.meal_type,
-               p.meal_date, p.meal_slot, p.status
+               p.meal_date, p.meal_slot, p.tiffin_kid_slot, p.status
         FROM weekly_meal_plan p
         JOIN recipe r ON r.id = p.recipe_id
         WHERE p.meal_date BETWEEN ? AND ? AND p.status != 'replaced'
         ORDER BY p.meal_date, p.meal_slot, p.id
       `).all(weekStart, weekEnd),
+      // Past meals nobody has answered yet (catch-up + morning digest).
+      catchupLookbackDays: rules.catchup_lookback_days,
+      unconfirmed: getUnconfirmedMeals(database, today, rules.catchup_lookback_days),
     };
   }
 
@@ -265,7 +236,7 @@ function createFoodRouter(database) {
       return res.status(400).json({ error: 'A valid weekStart date is required.' });
     }
     finalizePastMeals(database, today);
-    return res.json(getDashboard(weekStart));
+    return res.json(getDashboard(weekStart, today));
   });
 
   router.post('/groceries/stage', (req, res) => {
@@ -372,55 +343,10 @@ function createFoodRouter(database) {
       if (!plan || plan.status !== 'planned') {
         return null;
       }
-      if (AUTO_COOK_MEAL_SLOTS.includes(plan.meal_slot) && response !== 'no') {
+      if (AUTO_COOK_MEAL_SLOTS.includes(plan.meal_slot) && response !== RESPONSE.NO) {
         return null;
       }
-
-      const updated = database.prepare(`
-        UPDATE weekly_meal_plan
-        SET status = ?
-        WHERE id = ? AND status = 'planned'
-      `).run(response === 'yes' ? 'confirmed_cooked' : response === 'no' ? 'confirmed_skipped' : 'other', planId);
-      if (updated.changes !== 1) return null;
-
-      database.prepare(`
-        INSERT INTO meal_confirmation_log (plan_id, recipe_id, cooked_date, user_response, source)
-        VALUES (?, ?, ?, ?, 'manual')
-      `).run(plan.id, plan.recipe_id, plan.meal_date, response);
-
-      const consumed = [];
-      const missingInventory = [];
-      if (response === 'yes') {
-        const requiredFresh = database.prepare(`
-          SELECT i.id, i.name
-          FROM recipe_item ri
-          JOIN item i ON i.id = ri.item_id
-          WHERE ri.recipe_id = ? AND ri.role = 'REQUIRED'
-            AND i.inventory_type = 'FRESH'
-          ORDER BY i.id
-        `).all(plan.recipe_id);
-        const findOldestLot = database.prepare(`
-          SELECT id
-          FROM inventory
-          WHERE item_id = ? AND status = 'AVAILABLE'
-          ORDER BY purchase_date, id
-          LIMIT 1
-        `);
-        const markUsed = database.prepare(`
-          UPDATE inventory SET status = 'USED', used_date = ?
-          WHERE id = ? AND status = 'AVAILABLE'
-        `);
-        requiredFresh.forEach((item) => {
-          const lot = findOldestLot.get(item.id);
-          if (lot) {
-            markUsed.run(plan.meal_date, lot.id);
-            consumed.push({ item: item.name, inventoryId: lot.id });
-          } else {
-            missingInventory.push(item.name);
-          }
-        });
-      }
-      return { status: response, consumed, missingInventory };
+      return applyMealResponse(database, plan, response);
     });
 
     const result = confirmMeal();
@@ -428,6 +354,56 @@ function createFoodRouter(database) {
       return res.status(409).json({ error: 'This meal is no longer awaiting confirmation or cannot be manually confirmed.' });
     }
     return res.json(result);
+  });
+
+  // Publishes (or tops up) a week's plan on demand. The weekly scheduler runs
+  // the same function; existing plan rows are never overwritten.
+  router.post('/plan/generate', (req, res) => {
+    const { weekStart } = req.body;
+    const today = isDate(req.body.today) ? req.body.today : localDateString(new Date());
+    if (!isDate(weekStart) || !isMonday(weekStart)) {
+      return res.status(400).json({ error: 'weekStart must be the Monday of the week to plan.' });
+    }
+    return res.status(201).json(generateWeek(database, weekStart, { today }));
+  });
+
+  // Catch-up screen (spec 6.4 step 3): answer several past meals at once.
+  router.post('/catchup', (req, res) => {
+    const { responses } = req.body;
+    if (!isValidCatchUpBody(responses)) {
+      return res.status(400).json({ error: 'Choose cooked, skipped or away for one or more meals.' });
+    }
+    return res.json(applyCatchUpResponses(database, responses));
+  });
+
+  // Rows of the inventory table with a freshness label for available lots.
+  router.get('/inventory', (req, res) => {
+    const status = req.query.status === undefined ? 'AVAILABLE' : String(req.query.status).toUpperCase();
+    if (!INVENTORY_STATUS_FILTERS.has(status)) {
+      return res.status(400).json({ error: 'Status must be AVAILABLE, USED, DISCARDED or ALL.' });
+    }
+    const today = isDate(req.query.today) ? req.query.today : localDateString(new Date());
+    const lots = database.prepare(`
+      SELECT inv.id, inv.item_id, i.name AS item_name, i.category, inv.purchase_date,
+             inv.expiry_date, inv.store, inv.status, inv.used_date
+      FROM inventory inv
+      JOIN item i ON i.id = inv.item_id
+      WHERE (? = 'ALL' OR inv.status = ?)
+      ORDER BY CASE inv.status WHEN 'AVAILABLE' THEN 0 ELSE 1 END,
+               inv.expiry_date, inv.purchase_date, inv.id
+      LIMIT ?
+    `).all(status, status, INVENTORY_ROW_LIMIT).map((lot) => {
+      if (lot.status !== 'AVAILABLE' || !lot.expiry_date) return { ...lot, days_until_expiry: null, freshness: null };
+      const daysUntilExpiry = Math.round(
+        (Date.parse(`${lot.expiry_date}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / DAY_MILLISECONDS,
+      );
+      return {
+        ...lot,
+        days_until_expiry: daysUntilExpiry,
+        freshness: daysUntilExpiry < 0 ? 'Old' : daysUntilExpiry <= FRESHNESS_SOON_DAYS ? 'Use soon' : 'Fresh',
+      };
+    });
+    return res.json({ status, today, lots });
   });
 
   return router;

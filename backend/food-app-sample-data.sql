@@ -246,4 +246,15 @@ WHERE r.name = 'Mixed Vegetable'
         AND p.meal_slot = 'weekend_lunch'
   );
 
+-- Default weekday tiffin pattern from the spec's open decision list
+-- (Mon/Tue adult, Wed/Fri kids, Thu and weekends none). Standing rows only;
+-- change a row's tiffin_type to edit the pattern (use 'none' to turn a day
+-- off; a deleted row is re-seeded on restart). INSERT OR IGNORE never
+-- overwrites a row you have edited.
+INSERT OR IGNORE INTO tiffin_schedule (day_of_week, effective_date, tiffin_type)
+VALUES ('monday', NULL, 'adult_tiffin'),
+       ('tuesday', NULL, 'adult_tiffin'),
+       ('wednesday', NULL, 'kids_tiffin'),
+       ('friday', NULL, 'kids_tiffin');
+
 COMMIT;

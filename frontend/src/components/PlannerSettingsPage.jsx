@@ -8,21 +8,30 @@ import {
   FormControl,
   FormControlLabel,
   FormLabel,
+  List,
+  ListItemButton,
+  ListItemIcon,
+  ListItemText,
   Radio,
   RadioGroup,
   Typography,
 } from '@mui/material';
+import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import Inventory2OutlinedIcon from '@mui/icons-material/Inventory2Outlined';
 import LogoutIcon from '@mui/icons-material/Logout';
 import { useNavigate } from 'react-router-dom';
 import { ColorModeContext } from '../theme';
 import { useAuth } from '../context/useAuth';
 import PushNotificationSettings from './PushNotificationSettings';
 
-export default function PlannerSettingsPage() {
+export default function PlannerSettingsPage({ onGeneratePlan }) {
   const { preference, setColorMode } = useContext(ColorModeContext);
   const { logout } = useAuth();
   const navigate = useNavigate();
   const [error, setError] = useState('');
+  const [planMessage, setPlanMessage] = useState('');
+  const [generating, setGenerating] = useState(false);
 
   const signOut = async () => {
     setError('');
@@ -34,10 +43,55 @@ export default function PlannerSettingsPage() {
     }
   };
 
+  const generatePlan = async () => {
+    setError('');
+    setPlanMessage('');
+    setGenerating(true);
+    try {
+      const result = await onGeneratePlan();
+      setPlanMessage(
+        `Added ${result.created} planned ${result.created === 1 ? 'meal' : 'meals'}`
+        + `${result.alreadyPlanned ? `; ${result.alreadyPlanned} slots already had a plan` : ''}`
+        + `${result.unfilled.length ? `; ${result.unfilled.length} slots have no recipe that fits the current inventory` : ''}.`,
+      );
+    } catch (generateError) {
+      setError(generateError.message || 'Could not generate the weekly plan.');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
   return (
     <Box sx={{ maxWidth: 720, mx: 'auto', display: 'grid', gap: 2 }}>
       <Typography variant="h4">Menu</Typography>
       {error && <Alert severity="error">{error}</Alert>}
+      <Card>
+        <List disablePadding>
+          <ListItemButton onClick={() => navigate('/inventory')}>
+            <ListItemIcon><Inventory2OutlinedIcon /></ListItemIcon>
+            <ListItemText primary="Show Current Inventory" secondary="Purchased vegetables and their freshness" />
+            <ChevronRightIcon />
+          </ListItemButton>
+        </List>
+      </Card>
+      <Card>
+        <CardContent>
+          <Typography variant="h6" gutterBottom>Weekly meal plan</Typography>
+          <Typography color="text.secondary" sx={{ mb: 2 }}>
+            The plan is generated automatically each Sunday evening for the week ahead.
+            Use this to fill this week&apos;s empty slots now; meals already planned are never changed.
+          </Typography>
+          <Button
+            variant="contained"
+            startIcon={<AutoAwesomeOutlinedIcon />}
+            onClick={generatePlan}
+            disabled={generating}
+          >
+            {generating ? 'Generating…' : 'Generate this week'}
+          </Button>
+          {planMessage && <Alert severity="success" sx={{ mt: 2 }}>{planMessage}</Alert>}
+        </CardContent>
+      </Card>
       <PushNotificationSettings />
       <Card>
         <CardContent>

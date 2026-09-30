@@ -11,6 +11,8 @@ require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 const Database = require('better-sqlite3');
 const foodRoutes = require('./routes/food');
 const { initializeFoodData } = require('./db/foodData');
+const { createPushSender } = require('./services/pushSender');
+const { createScheduler } = require('./services/scheduler');
 
 const port = Number(process.env.PORT || 5005);
 const isProduction = process.env.NODE_ENV === 'production';
@@ -288,11 +290,17 @@ app.use((error, _req, res, _next) => {
   res.status(500).json({ error: 'The server could not complete the request.' });
 });
 
+// Weekly plan generation, evening confirmation push, retry and soak warning.
+const { sendPushToAll } = createPushSender({ database, webPush, pushConfigured });
+const scheduler = createScheduler({ database, sendPushToAll, pushConfigured });
+
 const server = app.listen(port, '0.0.0.0', () => {
   console.log(`Food app API listening on http://localhost:${port}`);
+  scheduler.start();
 });
 
 const shutdown = () => {
+  scheduler.stop();
   server.close(() => {
     database.close();
     process.exit(0);

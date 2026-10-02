@@ -3,6 +3,7 @@
 // finalizer and the catch-up screen all go through applyMealResponse so the
 // three paths can never drift apart.
 const { dateOffset } = require('./dates');
+const { UNCONFIRMED_SLOTS, sqlList } = require('./slots');
 
 const RESPONSE = Object.freeze({ YES: 'yes', NO: 'no', OTHER: 'other' });
 const STATUS_BY_RESPONSE = Object.freeze({
@@ -88,8 +89,9 @@ function getUnconfirmedMeals(database, today, lookbackDays) {
     WHERE p.status = 'planned'
       AND p.meal_date < ?
       AND p.meal_date >= ?
+      AND p.meal_slot NOT IN (${sqlList(UNCONFIRMED_SLOTS)})
     ORDER BY p.meal_date, p.meal_slot, p.id
-  `).all(today, dateOffset(today, -lookbackDays));
+  `).all(today, dateOffset(today, -lookbackDays), ...UNCONFIRMED_SLOTS);
 }
 
 function recordAwayDay(database, date) {

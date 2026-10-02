@@ -197,7 +197,7 @@ CREATE TABLE IF NOT EXISTS weekly_meal_plan (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     recipe_id INTEGER NOT NULL,
     meal_date TEXT NOT NULL,
-    meal_slot TEXT NOT NULL CHECK (meal_slot IN ('kids_tiffin', 'adult_tiffin', 'dinner', 'weekend_lunch')),
+    meal_slot TEXT NOT NULL, -- validated by the API: kids_tiffin, adult_tiffin, dinner, weekend_lunch, breakfast, sides, guest_special
     tiffin_kid_slot TEXT CHECK (tiffin_kid_slot IN ('AM', 'PM')),
     tiffin_adult_cycle_day INTEGER CHECK (tiffin_adult_cycle_day IN (1, 2)),
     status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'confirmed_cooked', 'confirmed_skipped', 'other', 'replaced')),

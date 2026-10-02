@@ -18,6 +18,7 @@ import {
 } from '@mui/material';
 import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import FreeBreakfastOutlinedIcon from '@mui/icons-material/FreeBreakfastOutlined';
 import Inventory2OutlinedIcon from '@mui/icons-material/Inventory2Outlined';
 import LogoutIcon from '@mui/icons-material/Logout';
 import { useNavigate } from 'react-router-dom';
@@ -70,6 +71,11 @@ export default function PlannerSettingsPage({ onGeneratePlan }) {
           <ListItemButton onClick={() => navigate('/inventory')}>
             <ListItemIcon><Inventory2OutlinedIcon /></ListItemIcon>
             <ListItemText primary="Show Current Inventory" secondary="Purchased vegetables and their freshness" />
+            <ChevronRightIcon />
+          </ListItemButton>
+          <ListItemButton onClick={() => navigate('/breakfast')}>
+            <ListItemIcon><FreeBreakfastOutlinedIcon /></ListItemIcon>
+            <ListItemText primary="Breakfast Ideas" secondary="Weekday mornings, no added sugar" />
             <ChevronRightIcon />
           </ListItemButton>
         </List>

@@ -121,6 +121,52 @@ export const tokens = (mode) => ({
       }),
 });
 
+// Form styling (GitHub issue #3). MUI's defaults use the primary colour, which
+// is near-black / navy here, so checkboxes, focused inputs and primary buttons
+// vanished into the dialog. Use the green accent instead and round the corners.
+const formComponents = (mode, colors) => {
+  const accent = mode === "dark" ? colors.greenAccent[500] : colors.greenAccent[400];
+  return {
+    MuiDialog: {
+      styleOverrides: {
+        paper: {
+          borderRadius: 20,
+          backgroundImage: "none",
+          backgroundColor: mode === "dark" ? colors.primary[400] : "#ffffff",
+        },
+      },
+    },
+    MuiOutlinedInput: {
+      styleOverrides: {
+        root: {
+          borderRadius: 12,
+          "&.Mui-focused .MuiOutlinedInput-notchedOutline": { borderColor: accent, borderWidth: 2 },
+        },
+      },
+    },
+    MuiInputLabel: {
+      styleOverrides: { root: { "&.Mui-focused": { color: accent } } },
+    },
+    MuiCheckbox: { defaultProps: { color: "secondary" } },
+    MuiRadio: { defaultProps: { color: "secondary" } },
+    MuiButton: {
+      styleOverrides: {
+        root: { borderRadius: 12 },
+        ...(mode === "dark"
+          ? {
+              containedPrimary: {
+                backgroundColor: colors.greenAccent[600],
+                color: colors.primary[600],
+                "&:hover": { backgroundColor: colors.greenAccent[500] },
+                "&.Mui-disabled": { backgroundColor: colors.primary[300], color: colors.primary[500] },
+              },
+            }
+          : {}),
+      },
+    },
+  };
+};
+
 // mui theme settings
 export const themeSettings = (mode) => {
   const colors = tokens(mode);
@@ -163,6 +209,9 @@ export const themeSettings = (mode) => {
             },
           }),
     },
+    // Rounder corners everywhere; forms follow the same accent as the app.
+    shape: { borderRadius: 12 },
+    components: formComponents(mode, colors),
     typography: {
       fontFamily: ["Inter", "sans-serif"].join(","),
       //fontFamily: ["Pinsetter", "cursive", "sans-serif"].join(","),

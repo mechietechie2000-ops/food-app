@@ -1,0 +1,199 @@
+{
+  "_readme": "Weekday breakfast ideas: healthy, no added sugar (fruit is fine). One line per idea. Edit freely; ids must stay unique. Seeded into the recipe table (meal_type 'breakfast') at startup; new ids are added, existing rows are never overwritten. overnightPrep=true triggers the 8 pm soak reminder when the idea is planned for the next morning.",
+  "weekdays": [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday"
+  ],
+  "ideas": [
+    {
+      "id": "avocado-toast",
+      "name": "Avocado toast on whole wheat bread with lemon and pepper",
+      "veg": true,
+      "overnightPrep": false
+    },
+    {
+      "id": "besan-chilla",
+      "name": "Besan chilla with grated carrot, onion and coriander",
+      "veg": true,
+      "overnightPrep": false
+    },
+    {
+      "id": "boiled-eggs-cucumber",
+      "name": "Boiled eggs with cucumber and tomato slices",
+      "veg": false,
+      "overnightPrep": false
+    },
+    {
+      "id": "carrot-cucumber-salad",
+      "name": "Carrot and cucumber salad with lemon and roasted cumin",
+      "veg": true,
+      "overnightPrep": false
+    },
+    {
+      "id": "chana-salad",
+      "name": "Chana salad with onion, tomato, cucumber and lemon",
+      "veg": true,
+      "overnightPrep": false
+    },
+    {
+      "id": "chia-pudding",
+      "name": "Chia pudding with milk and sliced fruit",
+      "veg": true,
+      "overnightPrep": true,
+      "soakHours": 6
+    },
+    {
+      "id": "chole-salad",
+      "name": "Chole salad with cucumber, coriander and lemon",
+      "veg": true,
+      "overnightPrep": true,
+      "soakHours": 8
+    },
+    {
+      "id": "egg-bhurji-toast",
+      "name": "Egg bhurji with whole wheat toast",
+      "veg": false,
+      "overnightPrep": false
+    },
+    {
+      "id": "idli-sambar",
+      "name": "Idli with sambar and coconut chutney",
+      "veg": true,
+      "overnightPrep": true,
+      "soakHours": 10
+    },
+    {
+      "id": "methi-thepla-curd",
+      "name": "Methi thepla with plain curd",
+      "veg": true,
+      "overnightPrep": false
+    },
+    {
+      "id": "moong-chilla",
+      "name": "Moong dal chilla with mint chutney",
+      "veg": true,
+      "overnightPrep": true,
+      "soakHours": 4
+    },
+    {
+      "id": "moong-sprouts-salad",
+      "name": "Moong sprouts salad with tomato, onion and lemon",
+      "veg": true,
+      "overnightPrep": true,
+      "soakHours": 8
+    },
+    {
+      "id": "overnight-oats",
+      "name": "Overnight oats with chia seeds, banana and cinnamon",
+      "veg": true,
+      "overnightPrep": true,
+      "soakHours": 6
+    },
+    {
+      "id": "palak-paratha-curd",
+      "name": "Palak paratha with plain curd",
+      "veg": true,
+      "overnightPrep": false
+    },
+    {
+      "id": "paneer-bhurji-roti",
+      "name": "Paneer bhurji rolled in a whole wheat roti",
+      "veg": true,
+      "overnightPrep": false
+    },
+    {
+      "id": "paneer-cucumber-sandwich",
+      "name": "Paneer, cucumber and tomato sandwich on whole wheat bread",
+      "veg": true,
+      "overnightPrep": false
+    },
+    {
+      "id": "curd-fruit-bowl",
+      "name": "Plain curd with seasonal fruit and a handful of nuts",
+      "veg": true,
+      "overnightPrep": false
+    },
+    {
+      "id": "yogurt-nuts-seeds",
+      "name": "Plain yogurt with berries, nuts and pumpkin seeds",
+      "veg": true,
+      "overnightPrep": false
+    },
+    {
+      "id": "ragi-dosa",
+      "name": "Ragi dosa with tomato chutney",
+      "veg": true,
+      "overnightPrep": false
+    },
+    {
+      "id": "ragi-porridge",
+      "name": "Ragi porridge cooked in milk with sliced banana",
+      "veg": true,
+      "overnightPrep": false
+    },
+    {
+      "id": "salted-sattu-drink",
+      "name": "Salted sattu drink with lemon and roasted cumin",
+      "veg": true,
+      "overnightPrep": false
+    },
+    {
+      "id": "masala-oats",
+      "name": "Savoury masala oats with vegetables",
+      "veg": true,
+      "overnightPrep": false
+    },
+    {
+      "id": "soaked-nuts-fruit",
+      "name": "Soaked almonds and walnuts with a piece of fruit",
+      "veg": true,
+      "overnightPrep": true,
+      "soakHours": 8
+    },
+    {
+      "id": "spinach-banana-smoothie",
+      "name": "Spinach, banana and curd smoothie",
+      "veg": true,
+      "overnightPrep": false
+    },
+    {
+      "id": "peanut-butter-banana-toast",
+      "name": "Unsalted peanut butter and banana toast on whole wheat bread",
+      "veg": true,
+      "overnightPrep": false
+    },
+    {
+      "id": "dalia-upma",
+      "name": "Vegetable dalia upma with peas and carrot",
+      "veg": true,
+      "overnightPrep": false
+    },
+    {
+      "id": "egg-veg-omelette",
+      "name": "Vegetable omelette with a side of cucumber",
+      "veg": false,
+      "overnightPrep": false
+    },
+    {
+      "id": "poha-vegetable",
+      "name": "Vegetable poha with peanuts and lemon",
+      "veg": true,
+      "overnightPrep": false
+    },
+    {
+      "id": "suji-vegetable-upma",
+      "name": "Vegetable suji upma with curry leaves",
+      "veg": true,
+      "overnightPrep": false
+    },
+    {
+      "id": "uttapam-vegetable",
+      "name": "Vegetable uttapam with tomato chutney",
+      "veg": true,
+      "overnightPrep": false
+    }
+  ]
+}

@@ -13,7 +13,14 @@ const { createScheduler } = require('../services/scheduler');
 
 const SILENT_LOGGER = { log() {}, error() {} };
 
-function createDatabase() {
+// The scenarios below were written against the original seven main dishes.
+// Pin them so the expanded Indian recipe list (see the "expanded recipe list"
+// tests) cannot change which dish wins. Sides, breakfast and dal sides stay on.
+const ORIGINAL_MAIN_DISHES = [
+  'Bhindi Masala', 'Aloo Gobi', 'Baingan Bharta', 'Lauki Dal', 'Gajar Matar', 'Palak Dal', 'Mixed Vegetable',
+];
+
+function createDatabase({ pinOriginalRecipes = true } = {}) {
   const database = new Database(':memory:');
   database.pragma('foreign_keys = ON');
   database.exec(`
@@ -27,6 +34,13 @@ function createDatabase() {
   // The sample data ships a few past plan rows; treat them as already answered
   // so they do not reserve inventory in these scenarios.
   database.prepare("UPDATE weekly_meal_plan SET status = 'confirmed_skipped'").run();
+  if (pinOriginalRecipes) {
+    database.prepare(`
+      UPDATE recipe SET approved = 0
+      WHERE meal_type IN ('sabzi', 'dal', 'curry', 'rice')
+        AND name NOT IN (${ORIGINAL_MAIN_DISHES.map(() => '?').join(', ')})
+    `).run(...ORIGINAL_MAIN_DISHES);
+  }
   return database;
 }
 

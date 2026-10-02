@@ -7,6 +7,7 @@
 // (Section 6.4: a pure timer that "just hopes" is not reliable enough.)
 const { rules } = require('./rules');
 const { generateWeek } = require('./mealPlanner');
+const { UNCONFIRMED_SLOTS, sqlList } = require('./slots');
 const {
   WEEK_DAYS,
   dateOffset,
@@ -28,6 +29,9 @@ const SLOT_LABELS = Object.freeze({
   adult_tiffin: 'adult tiffin',
   weekend_lunch: 'lunch',
   dinner: 'dinner',
+  breakfast: 'breakfast',
+  sides: 'sides',
+  guest_special: 'guest special',
 });
 const MAX_NAMES_IN_MESSAGE = 2;
 
@@ -96,8 +100,9 @@ function createScheduler({ database, sendPushToAll, pushConfigured, logger = con
       FROM weekly_meal_plan p
       JOIN recipe r ON r.id = p.recipe_id
       WHERE p.meal_date = ? AND p.status = 'planned' AND p.notified_at IS NULL
+        AND p.meal_slot NOT IN (${sqlList(UNCONFIRMED_SLOTS)})
       ORDER BY p.meal_slot, p.id
-    `).all(today);
+    `).all(today, ...UNCONFIRMED_SLOTS);
     if (rows.length === 0) return;
 
     const names = rows.map((row) => row.recipeName);
@@ -130,8 +135,9 @@ function createScheduler({ database, sendPushToAll, pushConfigured, logger = con
         AND p.notified_at <= ?
         AND p.retry_sent_at IS NULL
         AND p.meal_date >= ?
+        AND p.meal_slot NOT IN (${sqlList(UNCONFIRMED_SLOTS)})
       ORDER BY p.meal_date, p.meal_slot, p.id
-    `).all(cutoff, dateOffset(today, -rules.catchup_lookback_days));
+    `).all(cutoff, dateOffset(today, -rules.catchup_lookback_days), ...UNCONFIRMED_SLOTS);
     if (rows.length === 0) return;
 
     // Stamp first so a slow push service can never cause a second retry.

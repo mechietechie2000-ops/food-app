@@ -1,0 +1,169 @@
+{
+  "_readme": "Protein portion for kids (GitHub issue #4). Pick order for a day: 1) veg-only weekday (Tuesday/Thursday), a festival, or a strict-veg/fasting calendar day -> veg_restricted_days; 2) summer months -> summer; 3) otherwise -> default (egg). weekend_sides adds one extra side on Saturday and Sunday. Seeded into the recipe table (meal_type 'protein_side' / 'weekend_side') at startup; new ids are added, existing rows are never overwritten.",
+  "summerMonths": [
+    6,
+    7,
+    8,
+    9
+  ],
+  "vegOnlyWeekdays": [
+    "Tuesday",
+    "Thursday"
+  ],
+  "repeatAvoidanceDays": 3,
+  "pools": {
+    "veg_restricted_days": [
+      {
+        "id": "chole-mild",
+        "name": "Chole (mild)",
+        "veg": true
+      },
+      {
+        "id": "grilled-paneer-cubes",
+        "name": "Grilled paneer cubes",
+        "veg": true
+      },
+      {
+        "id": "masala-soya-chunks",
+        "name": "Masala soya chunks",
+        "veg": true
+      },
+      {
+        "id": "paneer-bhurji",
+        "name": "Paneer bhurji",
+        "veg": true
+      },
+      {
+        "id": "paneer-tikka-mild",
+        "name": "Paneer tikka (mild)",
+        "veg": true
+      },
+      {
+        "id": "soya-keema",
+        "name": "Soya keema",
+        "veg": true
+      },
+      {
+        "id": "soya-nuggets-stir-fry",
+        "name": "Soya nuggets stir-fry",
+        "veg": true
+      }
+    ],
+    "summer": [
+      {
+        "id": "chhach",
+        "name": "Chhach (spiced buttermilk)",
+        "veg": true
+      },
+      {
+        "id": "cucumber-raita",
+        "name": "Cucumber raita",
+        "veg": true
+      },
+      {
+        "id": "curd-roasted-cumin",
+        "name": "Curd with roasted cumin",
+        "veg": true
+      },
+      {
+        "id": "mint-raita",
+        "name": "Mint raita",
+        "veg": true
+      },
+      {
+        "id": "plain-yogurt",
+        "name": "Plain yogurt",
+        "veg": true
+      },
+      {
+        "id": "salted-lassi",
+        "name": "Salted lassi",
+        "veg": true
+      },
+      {
+        "id": "yogurt-fruit",
+        "name": "Yogurt with sliced fruit",
+        "veg": true
+      }
+    ],
+    "default": [
+      {
+        "id": "boiled-egg",
+        "name": "Boiled egg",
+        "veg": false
+      },
+      {
+        "id": "egg-veg-omelette-kids",
+        "name": "Egg and vegetable omelette",
+        "veg": false
+      },
+      {
+        "id": "egg-bhurji-mild",
+        "name": "Egg bhurji (mild)",
+        "veg": false
+      },
+      {
+        "id": "egg-salad-cucumber",
+        "name": "Egg salad with cucumber",
+        "veg": false
+      },
+      {
+        "id": "masala-omelette-mild",
+        "name": "Masala omelette (mild)",
+        "veg": false
+      },
+      {
+        "id": "mini-egg-muffins",
+        "name": "Mini egg muffins",
+        "veg": false
+      },
+      {
+        "id": "scrambled-eggs",
+        "name": "Scrambled eggs",
+        "veg": false
+      },
+      {
+        "id": "sunny-side-up-egg",
+        "name": "Sunny-side-up egg",
+        "veg": false
+      }
+    ],
+    "weekend_sides": [
+      {
+        "id": "avocado-lemon",
+        "name": "Avocado slices with lemon and salt",
+        "veg": true
+      },
+      {
+        "id": "chana-salad-side",
+        "name": "Chana salad",
+        "veg": true
+      },
+      {
+        "id": "corn-chaat",
+        "name": "Corn chaat",
+        "veg": true
+      },
+      {
+        "id": "cucumber-carrot-side",
+        "name": "Cucumber and carrot salad",
+        "veg": true
+      },
+      {
+        "id": "peanut-masala",
+        "name": "Peanut masala",
+        "veg": true
+      },
+      {
+        "id": "potato-chili",
+        "name": "Potato chili",
+        "veg": true
+      },
+      {
+        "id": "sprouts-chaat",
+        "name": "Sprouts chaat",
+        "veg": true
+      }
+    ]
+  }
+}

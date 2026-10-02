@@ -8,6 +8,8 @@
 // The UI cards read weekly_meal_plan, never this module, so a published plan
 // stays stable until something explicitly changes it.
 const { rules } = require('./rules');
+const { SLOT, NON_MAIN_MEAL_TYPES, sqlList } = require('./slots');
+const { planSidesForDate } = require('./kidsSides');
 const {
   WEEK_DAYS,
   dateOffset,
@@ -18,12 +20,6 @@ const {
   localDateString,
 } = require('./dates');
 
-const SLOT = Object.freeze({
-  KIDS_TIFFIN: 'kids_tiffin',
-  ADULT_TIFFIN: 'adult_tiffin',
-  WEEKEND_LUNCH: 'weekend_lunch',
-  DINNER: 'dinner',
-});
 const TIFFIN_TYPE = Object.freeze({
   KIDS: 'kids_tiffin',
   ADULT: 'adult_tiffin',
@@ -36,7 +32,6 @@ const DIETARY = Object.freeze({
   NONE: 'none',
 });
 const KIDS_TIFFIN_PARTS = ['AM', 'PM'];
-const DAL_SIDE_MEAL_TYPE = 'dal_side'; // planned separately from the vegetable dish
 const INDIAN_CUISINE = 'Indian';       // adult tiffin must NOT be Indian (spec 4a)
 const NO_EXPIRY_DAYS = 9999;           // sorts lots without an expiry date last
 // Slots where festival menus and the weekend non-veg/frozen preference apply.
@@ -65,9 +60,9 @@ function loadPlanningContext(database) {
     SELECT id, name, cuisine, meal_type, is_veg, is_frozen_friendly, cooldown_days,
            suitable_for_kids_tiffin, suitable_for_adult_tiffin, suitable_for_adult_dinner
     FROM recipe
-    WHERE approved = 1 AND COALESCE(meal_type, '') != ?
+    WHERE approved = 1 AND COALESCE(meal_type, '') NOT IN (${sqlList(NON_MAIN_MEAL_TYPES)})
     ORDER BY name
-  `).all(DAL_SIDE_MEAL_TYPE);
+  `).all(...NON_MAIN_MEAL_TYPES); // dal sides, breakfast and kids sides are planned separately
 
   const itemsByRecipe = groupBy(database.prepare(`
     SELECT ri.recipe_id AS recipeId, ri.role, i.id AS itemId, i.name,
@@ -355,6 +350,12 @@ function generateWeek(database, weekStart, { today = localDateString(new Date())
     for (let offset = 0; offset < WEEK_DAYS; offset += 1) {
       const date = dateOffset(weekStart, offset);
       if (date < today) continue;
+
+      // Kids protein side (issue #4): no inventory, no confirmation.
+      planSidesForDate(database, date, getCalendarInfo(database, date)).forEach((side) => {
+        summary.created += 1;
+        summary.plan.push({ ...side, kidPart: null });
+      });
 
       slotsForDate(database, date).forEach(({ slot, kidParts }) => {
         if (hasPlanRow.get(date, slot)) {

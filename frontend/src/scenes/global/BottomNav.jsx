@@ -10,7 +10,7 @@ import { tokens } from '../../theme';
 export const BOTTOM_NAV_HEIGHT = 56;
 
 // Pages that live under the hamburger Menu keep "Menu" highlighted.
-const MENU_PATHS = ['/settings', '/inventory'];
+const MENU_PATHS = ['/settings', '/inventory', '/breakfast'];
 
 /**
  * Bottom bar: Home | Add | Groceries | Confirm | Menu.

@@ -24,6 +24,7 @@ import {
   useTheme,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
+import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
 import ReceiptLongOutlinedIcon from '@mui/icons-material/ReceiptLongOutlined';
 import RestaurantMenuOutlinedIcon from '@mui/icons-material/RestaurantMenuOutlined';
 import { useLocation } from 'react-router-dom';
@@ -33,17 +34,23 @@ import BottomNav, { BOTTOM_NAV_HEIGHT } from '../scenes/global/BottomNav';
 import PlannerSettingsPage from './PlannerSettingsPage';
 import PlannerTopbar from './PlannerTopbar';
 import InventoryPage from './InventoryPage';
+import BreakfastIdeasPage from './BreakfastIdeasPage';
 import CatchUpDialog from './CatchUpDialog';
 import AttentionCard from './AttentionCard';
 
 const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const MEALS = ['Kids Tiffin', 'Lunch', 'Dinner'];
+// Shown on a day card only when something is planned; never confirmed.
+const OPTIONAL_MEALS = { before: ['Breakfast'], after: ['Sides', 'Guest Special'] };
+const UNCONFIRMED_MEALS = ['Breakfast', 'Sides', 'Guest Special'];
+const CHECKLIST_SX = { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', columnGap: 1 };
 const MEAL_SLOTS = [
+  { label: 'Breakfast', value: 'breakfast' },
   { label: 'Kids Tiffin', value: 'kids_tiffin' },
   { label: 'Adult Tiffin', value: 'adult_tiffin' },
   { label: 'Lunch', value: 'weekend_lunch' },
   { label: 'Dinner', value: 'dinner' },
-  { label: 'Sides', value: 'sides' }, 
+  { label: 'Sides', value: 'sides' },
   { label: 'Guest Special', value: 'guest_special' },
 ];
 
@@ -85,7 +92,13 @@ function statusColor(status) {
 }
 
 function DayCard({ day, meals, dalSuggestion, pairedVegetable, colors, onConfirm, onPlanDal }) {
-  const mealLabels = meals['Adult Tiffin'] ? [...MEALS.slice(0, 1), 'Adult Tiffin', ...MEALS.slice(1)] : MEALS;
+  const mainMeals = meals['Adult Tiffin'] ? [...MEALS.slice(0, 1), 'Adult Tiffin', ...MEALS.slice(1)] : MEALS;
+  const planned = (label) => (meals[label]?.length ?? 0) > 0;
+  const mealLabels = [
+    ...OPTIONAL_MEALS.before.filter(planned),
+    ...mainMeals,
+    ...OPTIONAL_MEALS.after.filter(planned),
+  ];
   return (
     <Card
       elevation={0}
@@ -118,7 +131,7 @@ function DayCard({ day, meals, dalSuggestion, pairedVegetable, colors, onConfirm
                   <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>
                     {entry.name}
                   </Typography>
-                  {entry.status !== 'planned' ? (
+                  {UNCONFIRMED_MEALS.includes(meal) ? null : entry.status !== 'planned' ? (
                     <Chip
                       size="small"
                       color={statusColor(entry.status)}
@@ -185,7 +198,8 @@ export default function RecipePlannerPage() {
   const location = useLocation();
   const theme = useTheme();
   const colors = tokens(theme.palette.mode);
-  const view = location.pathname === '/settings' ? 'settings' : location.pathname === '/inventory' ? 'inventory' : 'home';
+  const VIEW_BY_PATH = { '/settings': 'settings', '/inventory': 'inventory', '/breakfast': 'breakfast' };
+  const view = VIEW_BY_PATH[location.pathname] || 'home';
   const weekStart = useMemo(() => getMonday(new Date()), []);
   const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -268,12 +282,9 @@ export default function RecipePlannerPage() {
     update?.catch(() => {});
   }, [dashboard, attentionCount]);
   const recommendations = dashboard?.recommendations || [];
-  const selectedRecipes = recommendations.filter((recipe) => {
-    if (recipeMeal === 'kids_tiffin') return recipe.suitableForKidsTiffin;
-    if (recipeMeal === 'adult_tiffin') return recipe.suitableForAdultTiffin;
-    if (recipeMeal === 'dinner') return recipe.suitableForAdultDinner;
-    return true;
-  });
+  // The server decides which recipes fit each slot (inventory-driven mains,
+  // pantry mains, breakfast ideas, kids sides).
+  const selectedRecipes = dashboard?.slotRecipes?.[recipeMeal] || [];
 
   const openRecipeDialog = (suggestedRecipeId = '') => {
     setRecipeId(suggestedRecipeId ? String(suggestedRecipeId) : '');
@@ -331,6 +342,23 @@ export default function RecipePlannerPage() {
       await refreshDashboard();
     } catch (error) {
       setPageError(error.message || 'Could not confirm these purchases.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteStagedItem = async (item) => {
+    setSaving(true);
+    try {
+      await api.delete(`/food/groceries/stage/${item.id}`);
+      setSelectedStageIds((current) => current.filter((id) => id !== item.id));
+      const remaining = (dashboard?.groceryStage || []).filter((entry) => entry.id !== item.id);
+      if (remaining.length === 0) setPurchaseDialogOpen(false);
+      setNotice(`Removed ${item.item_name} from the grocery list.`);
+      await refreshDashboard();
+    } catch (error) {
+      setPageError(error.message || 'Could not remove this item.');
+      await refreshDashboard();
     } finally {
       setSaving(false);
     }
@@ -468,6 +496,7 @@ export default function RecipePlannerPage() {
         {loading && <CircularProgress size={24} sx={{ mb: 2 }} />}
         {view === 'settings' && <PlannerSettingsPage onGeneratePlan={generatePlan} />}
         {view === 'inventory' && <InventoryPage />}
+        {view === 'breakfast' && <BreakfastIdeasPage />}
         {view === 'home' && (
           <AttentionCard
             unconfirmed={unconfirmedMeals}
@@ -505,8 +534,10 @@ export default function RecipePlannerPage() {
               label="Date"
               value={recipeDate}
               onChange={(event) => setRecipeDate(event.target.value)}
-              InputLabelProps={{ shrink: true }}
-              inputProps={{ min: weekStart, max: offsetDate(weekStart, 6) }}
+              slotProps={{
+                inputLabel: { shrink: true },
+                htmlInput: { min: weekStart, max: offsetDate(weekStart, 6) },
+              }}
             />
             <TextField
               select
@@ -550,22 +581,24 @@ export default function RecipePlannerPage() {
         <Box component="form" onSubmit={stageGroceries}>
           <DialogTitle>Add fresh vegetables to the grocery list</DialogTitle>
           <DialogContent sx={{ display: 'grid', pt: '8px !important' }}>
-            {(dashboard?.items || []).map((item) => (
-              <FormControlLabel
-                key={item.id}
-                control={(
-                  <Checkbox
-                    checked={selectedItemIds.includes(item.id)}
-                    onChange={(event) => setSelectedItemIds((current) => (
-                      event.target.checked
-                        ? [...current, item.id]
-                        : current.filter((id) => id !== item.id)
-                    ))}
-                  />
-                )}
-                label={item.name}
-              />
-            ))}
+            <Box sx={CHECKLIST_SX}>
+              {(dashboard?.items || []).map((item) => (
+                <FormControlLabel
+                  key={item.id}
+                  control={(
+                    <Checkbox
+                      checked={selectedItemIds.includes(item.id)}
+                      onChange={(event) => setSelectedItemIds((current) => (
+                        event.target.checked
+                          ? [...current, item.id]
+                          : current.filter((id) => id !== item.id)
+                      ))}
+                    />
+                  )}
+                  label={item.name}
+                />
+              ))}
+            </Box>
             <Typography variant="caption" color="text.secondary">
               Only tracked fresh vegetables are listed; pantry staples stay out of inventory.
             </Typography>
@@ -583,37 +616,49 @@ export default function RecipePlannerPage() {
         <Box component="form" onSubmit={confirmPurchases}>
           <DialogTitle>Confirm purchased vegetables</DialogTitle>
           <DialogContent sx={{ display: 'grid', gap: 1, pt: '8px !important' }}>
-            {dashboard?.groceryStage.map((item) => (
-              <FormControlLabel
-                key={item.id}
-                control={(
-                  <Checkbox
-                    checked={selectedStageIds.includes(item.id)}
-                    onChange={(event) => setSelectedStageIds((current) => (
-                      event.target.checked
-                        ? [...current, item.id]
-                        : current.filter((id) => id !== item.id)
-                    ))}
+            <Box sx={CHECKLIST_SX}>
+              {dashboard?.groceryStage.map((item) => (
+                <Box key={item.id} sx={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
+                  <FormControlLabel
+                    sx={{ flex: 1, minWidth: 0, mr: 0 }}
+                    control={(
+                      <Checkbox
+                        checked={selectedStageIds.includes(item.id)}
+                        onChange={(event) => setSelectedStageIds((current) => (
+                          event.target.checked
+                            ? [...current, item.id]
+                            : current.filter((id) => id !== item.id)
+                        ))}
+                      />
+                    )}
+                    label={item.item_name}
                   />
-                )}
-                label={item.item_name}
-              />
-            ))}
+                  <IconButton
+                    size="small"
+                    aria-label={`Remove ${item.item_name} from the grocery list`}
+                    onClick={() => deleteStagedItem(item)}
+                    disabled={saving}
+                  >
+                    <DeleteOutlinedIcon fontSize="small" />
+                  </IconButton>
+                </Box>
+              ))}
+            </Box>
             <TextField
               type="date"
               label="Purchase date"
               value={purchaseDate}
               onChange={(event) => setPurchaseDate(event.target.value)}
-              InputLabelProps={{ shrink: true }}
+              slotProps={{ inputLabel: { shrink: true } }}
             />
             <TextField
               label="Store (optional)"
               value={store}
               onChange={(event) => setStore(event.target.value)}
-              inputProps={{ maxLength: 120 }}
+              slotProps={{ htmlInput: { maxLength: 120 } }}
             />
             <Typography variant="caption" color="text.secondary">
-              Each confirmed vegetable becomes a separate available purchase lot.
+              Each confirmed vegetable becomes a separate available purchase lot. Use the bin to remove an item you no longer need.
             </Typography>
           </DialogContent>
           <DialogActions sx={{ px: 3, pb: 2 }}>

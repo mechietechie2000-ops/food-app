@@ -35,6 +35,32 @@ lunch, and dinner, mark a plan **Skipped** when it was not eaten; an unskipped
 plan is assumed cooked after its date passes and required fresh inventory is
 updated then. Adult tiffin keeps its separate manual confirmation.
 
+### Breakfast, sides, guest specials and recipe lists
+
+- **Slots:** `breakfast`, `sides` and `guest_special` join the four existing
+  meal slots. They are planned by hand (sides are also generated, below), are
+  never confirmed, never appear in the evening push or catch-up screen, and
+  never use inventory. `weekly_meal_plan.meal_slot` no longer has a database
+  `CHECK`; the API validates slot names. Existing databases need
+  `backend/migrations/001_weekly_meal_plan_drop_slot_check.sql` run once
+  (stop the API and back up the database first).
+- **Breakfast ideas** (`backend/config/breakfast-ideas.json`): one line each,
+  weekday mornings, no added sugar (fruit is fine). Browse them under
+  Menu > Breakfast Ideas. Ideas marked `overnightPrep` trigger the 8 pm soak
+  reminder when planned for the next morning.
+- **Kids protein** (`backend/config/kids-protein.json`): the weekly plan adds
+  one `sides` row per day. Tuesday, Thursday, festivals and strict-veg/fasting
+  days use paneer, chole or soya; June to September uses curd, yogurt, lassi or
+  chhach; every other day uses egg. Saturday and Sunday also get a weekend side.
+- Both JSON lists are copied into the `recipe` table at startup so plan rows can
+  point at them. Seeding only adds missing rows; it never overwrites edits.
+- **Indian recipes:** about 45 veg and non-veg dishes are in
+  `food-app-sample-data.sql`. Dishes with a fresh vegetable are planned
+  automatically; dishes built only from always-available items (chicken, paneer,
+  dals) can be planned by hand for lunch, dinner or guest special.
+- **Grocery list:** the bin icon in *Confirm purchased vegetables* removes a
+  pending item. Confirmed purchases cannot be deleted there.
+
 ## Weekly plan, reminders and catch-up
 
 The API process runs a small scheduler (checked every minute, server local

@@ -1,0 +1,2465 @@
+diff --git a/README.md b/README.md
+index 1452cd4..5d37bff 100644
+--- a/README.md
++++ b/README.md
+@@ -35,6 +35,32 @@ lunch, and dinner, mark a plan **Skipped** when it was not eaten; an unskipped
+ plan is assumed cooked after its date passes and required fresh inventory is
+ updated then. Adult tiffin keeps its separate manual confirmation.
+ 
++### Breakfast, sides, guest specials and recipe lists
++
++- **Slots:** `breakfast`, `sides` and `guest_special` join the four existing
++  meal slots. They are planned by hand (sides are also generated, below), are
++  never confirmed, never appear in the evening push or catch-up screen, and
++  never use inventory. `weekly_meal_plan.meal_slot` no longer has a database
++  `CHECK`; the API validates slot names. Existing databases need
++  `backend/migrations/001_weekly_meal_plan_drop_slot_check.sql` run once
++  (stop the API and back up the database first).
++- **Breakfast ideas** (`backend/config/breakfast-ideas.json`): one line each,
++  weekday mornings, no added sugar (fruit is fine). Browse them under
++  Menu > Breakfast Ideas. Ideas marked `overnightPrep` trigger the 8 pm soak
++  reminder when planned for the next morning.
++- **Kids protein** (`backend/config/kids-protein.json`): the weekly plan adds
++  one `sides` row per day. Tuesday, Thursday, festivals and strict-veg/fasting
++  days use paneer, chole or soya; June to September uses curd, yogurt, lassi or
++  chhach; every other day uses egg. Saturday and Sunday also get a weekend side.
++- Both JSON lists are copied into the `recipe` table at startup so plan rows can
++  point at them. Seeding only adds missing rows; it never overwrites edits.
++- **Indian recipes:** about 45 veg and non-veg dishes are in
++  `food-app-sample-data.sql`. Dishes with a fresh vegetable are planned
++  automatically; dishes built only from always-available items (chicken, paneer,
++  dals) can be planned by hand for lunch, dinner or guest special.
++- **Grocery list:** the bin icon in *Confirm purchased vegetables* removes a
++  pending item. Confirmed purchases cannot be deleted there.
++
+ ## Weekly plan, reminders and catch-up
+ 
+ The API process runs a small scheduler (checked every minute, server local
+diff --git a/backend/config/breakfast-ideas.json b/backend/config/breakfast-ideas.json
+new file mode 100644
+index 0000000..47325c2
+--- /dev/null
++++ b/backend/config/breakfast-ideas.json
+@@ -0,0 +1,199 @@
++{
++  "_readme": "Weekday breakfast ideas: healthy, no added sugar (fruit is fine). One line per idea. Edit freely; ids must stay unique. Seeded into the recipe table (meal_type 'breakfast') at startup; new ids are added, existing rows are never overwritten. overnightPrep=true triggers the 8 pm soak reminder when the idea is planned for the next morning.",
++  "weekdays": [
++    "Monday",
++    "Tuesday",
++    "Wednesday",
++    "Thursday",
++    "Friday"
++  ],
++  "ideas": [
++    {
++      "id": "avocado-toast",
++      "name": "Avocado toast on whole wheat bread with lemon and pepper",
++      "veg": true,
++      "overnightPrep": false
++    },
++    {
++      "id": "besan-chilla",
++      "name": "Besan chilla with grated carrot, onion and coriander",
++      "veg": true,
++      "overnightPrep": false
++    },
++    {
++      "id": "boiled-eggs-cucumber",
++      "name": "Boiled eggs with cucumber and tomato slices",
++      "veg": false,
++      "overnightPrep": false
++    },
++    {
++      "id": "carrot-cucumber-salad",
++      "name": "Carrot and cucumber salad with lemon and roasted cumin",
++      "veg": true,
++      "overnightPrep": false
++    },
++    {
++      "id": "chana-salad",
++      "name": "Chana salad with onion, tomato, cucumber and lemon",
++      "veg": true,
++      "overnightPrep": false
++    },
++    {
++      "id": "chia-pudding",
++      "name": "Chia pudding with milk and sliced fruit",
++      "veg": true,
++      "overnightPrep": true,
++      "soakHours": 6
++    },
++    {
++      "id": "chole-salad",
++      "name": "Chole salad with cucumber, coriander and lemon",
++      "veg": true,
++      "overnightPrep": true,
++      "soakHours": 8
++    },
++    {
++      "id": "egg-bhurji-toast",
++      "name": "Egg bhurji with whole wheat toast",
++      "veg": false,
++      "overnightPrep": false
++    },
++    {
++      "id": "idli-sambar",
++      "name": "Idli with sambar and coconut chutney",
++      "veg": true,
++      "overnightPrep": true,
++      "soakHours": 10
++    },
++    {
++      "id": "methi-thepla-curd",
++      "name": "Methi thepla with plain curd",
++      "veg": true,
++      "overnightPrep": false
++    },
++    {
++      "id": "moong-chilla",
++      "name": "Moong dal chilla with mint chutney",
++      "veg": true,
++      "overnightPrep": true,
++      "soakHours": 4
++    },
++    {
++      "id": "moong-sprouts-salad",
++      "name": "Moong sprouts salad with tomato, onion and lemon",
++      "veg": true,
++      "overnightPrep": true,
++      "soakHours": 8
++    },
++    {
++      "id": "overnight-oats",
++      "name": "Overnight oats with chia seeds, banana and cinnamon",
++      "veg": true,
++      "overnightPrep": true,
++      "soakHours": 6
++    },
++    {
++      "id": "palak-paratha-curd",
++      "name": "Palak paratha with plain curd",
++      "veg": true,
++      "overnightPrep": false
++    },
++    {
++      "id": "paneer-bhurji-roti",
++      "name": "Paneer bhurji rolled in a whole wheat roti",
++      "veg": true,
++      "overnightPrep": false
++    },
++    {
++      "id": "paneer-cucumber-sandwich",
++      "name": "Paneer, cucumber and tomato sandwich on whole wheat bread",
++      "veg": true,
++      "overnightPrep": false
++    },
++    {
++      "id": "curd-fruit-bowl",
++      "name": "Plain curd with seasonal fruit and a handful of nuts",
++      "veg": true,
++      "overnightPrep": false
++    },
++    {
++      "id": "yogurt-nuts-seeds",
++      "name": "Plain yogurt with berries, nuts and pumpkin seeds",
++      "veg": true,
++      "overnightPrep": false
++    },
++    {
++      "id": "ragi-dosa",
++      "name": "Ragi dosa with tomato chutney",
++      "veg": true,
++      "overnightPrep": false
++    },
++    {
++      "id": "ragi-porridge",
++      "name": "Ragi porridge cooked in milk with sliced banana",
++      "veg": true,
++      "overnightPrep": false
++    },
++    {
++      "id": "salted-sattu-drink",
++      "name": "Salted sattu drink with lemon and roasted cumin",
++      "veg": true,
++      "overnightPrep": false
++    },
++    {
++      "id": "masala-oats",
++      "name": "Savoury masala oats with vegetables",
++      "veg": true,
++      "overnightPrep": false
++    },
++    {
++      "id": "soaked-nuts-fruit",
++      "name": "Soaked almonds and walnuts with a piece of fruit",
++      "veg": true,
++      "overnightPrep": true,
++      "soakHours": 8
++    },
++    {
++      "id": "spinach-banana-smoothie",
++      "name": "Spinach, banana and curd smoothie",
++      "veg": true,
++      "overnightPrep": false
++    },
++    {
++      "id": "peanut-butter-banana-toast",
++      "name": "Unsalted peanut butter and banana toast on whole wheat bread",
++      "veg": true,
++      "overnightPrep": false
++    },
++    {
++      "id": "dalia-upma",
++      "name": "Vegetable dalia upma with peas and carrot",
++      "veg": true,
++      "overnightPrep": false
++    },
++    {
++      "id": "egg-veg-omelette",
++      "name": "Vegetable omelette with a side of cucumber",
++      "veg": false,
++      "overnightPrep": false
++    },
++    {
++      "id": "poha-vegetable",
++      "name": "Vegetable poha with peanuts and lemon",
++      "veg": true,
++      "overnightPrep": false
++    },
++    {
++      "id": "suji-vegetable-upma",
++      "name": "Vegetable suji upma with curry leaves",
++      "veg": true,
++      "overnightPrep": false
++    },
++    {
++      "id": "uttapam-vegetable",
++      "name": "Vegetable uttapam with tomato chutney",
++      "veg": true,
++      "overnightPrep": false
++    }
++  ]
++}
+diff --git a/backend/config/kids-protein.json b/backend/config/kids-protein.json
+new file mode 100644
+index 0000000..094398e
+--- /dev/null
++++ b/backend/config/kids-protein.json
+@@ -0,0 +1,169 @@
++{
++  "_readme": "Protein portion for kids (GitHub issue #4). Pick order for a day: 1) veg-only weekday (Tuesday/Thursday), a festival, or a strict-veg/fasting calendar day -> veg_restricted_days; 2) summer months -> summer; 3) otherwise -> default (egg). weekend_sides adds one extra side on Saturday and Sunday. Seeded into the recipe table (meal_type 'protein_side' / 'weekend_side') at startup; new ids are added, existing rows are never overwritten.",
++  "summerMonths": [
++    6,
++    7,
++    8,
++    9
++  ],
++  "vegOnlyWeekdays": [
++    "Tuesday",
++    "Thursday"
++  ],
++  "repeatAvoidanceDays": 3,
++  "pools": {
++    "veg_restricted_days": [
++      {
++        "id": "chole-mild",
++        "name": "Chole (mild)",
++        "veg": true
++      },
++      {
++        "id": "grilled-paneer-cubes",
++        "name": "Grilled paneer cubes",
++        "veg": true
++      },
++      {
++        "id": "masala-soya-chunks",
++        "name": "Masala soya chunks",
++        "veg": true
++      },
++      {
++        "id": "paneer-bhurji",
++        "name": "Paneer bhurji",
++        "veg": true
++      },
++      {
++        "id": "paneer-tikka-mild",
++        "name": "Paneer tikka (mild)",
++        "veg": true
++      },
++      {
++        "id": "soya-keema",
++        "name": "Soya keema",
++        "veg": true
++      },
++      {
++        "id": "soya-nuggets-stir-fry",
++        "name": "Soya nuggets stir-fry",
++        "veg": true
++      }
++    ],
++    "summer": [
++      {
++        "id": "chhach",
++        "name": "Chhach (spiced buttermilk)",
++        "veg": true
++      },
++      {
++        "id": "cucumber-raita",
++        "name": "Cucumber raita",
++        "veg": true
++      },
++      {
++        "id": "curd-roasted-cumin",
++        "name": "Curd with roasted cumin",
++        "veg": true
++      },
++      {
++        "id": "mint-raita",
++        "name": "Mint raita",
++        "veg": true
++      },
++      {
++        "id": "plain-yogurt",
++        "name": "Plain yogurt",
++        "veg": true
++      },
++      {
++        "id": "salted-lassi",
++        "name": "Salted lassi",
++        "veg": true
++      },
++      {
++        "id": "yogurt-fruit",
++        "name": "Yogurt with sliced fruit",
++        "veg": true
++      }
++    ],
++    "default": [
++      {
++        "id": "boiled-egg",
++        "name": "Boiled egg",
++        "veg": false
++      },
++      {
++        "id": "egg-veg-omelette-kids",
++        "name": "Egg and vegetable omelette",
++        "veg": false
++      },
++      {
++        "id": "egg-bhurji-mild",
++        "name": "Egg bhurji (mild)",
++        "veg": false
++      },
++      {
++        "id": "egg-salad-cucumber",
++        "name": "Egg salad with cucumber",
++        "veg": false
++      },
++      {
++        "id": "masala-omelette-mild",
++        "name": "Masala omelette (mild)",
++        "veg": false
++      },
++      {
++        "id": "mini-egg-muffins",
++        "name": "Mini egg muffins",
++        "veg": false
++      },
++      {
++        "id": "scrambled-eggs",
++        "name": "Scrambled eggs",
++        "veg": false
++      },
++      {
++        "id": "sunny-side-up-egg",
++        "name": "Sunny-side-up egg",
++        "veg": false
++      }
++    ],
++    "weekend_sides": [
++      {
++        "id": "avocado-lemon",
++        "name": "Avocado slices with lemon and salt",
++        "veg": true
++      },
++      {
++        "id": "chana-salad-side",
++        "name": "Chana salad",
++        "veg": true
++      },
++      {
++        "id": "corn-chaat",
++        "name": "Corn chaat",
++        "veg": true
++      },
++      {
++        "id": "cucumber-carrot-side",
++        "name": "Cucumber and carrot salad",
++        "veg": true
++      },
++      {
++        "id": "peanut-masala",
++        "name": "Peanut masala",
++        "veg": true
++      },
++      {
++        "id": "potato-chili",
++        "name": "Potato chili",
++        "veg": true
++      },
++      {
++        "id": "sprouts-chaat",
++        "name": "Sprouts chaat",
++        "veg": true
++      }
++    ]
++  }
++}
+diff --git a/backend/db/foodData.js b/backend/db/foodData.js
+index 5fb4b95..346cf35 100644
+--- a/backend/db/foodData.js
++++ b/backend/db/foodData.js
+@@ -1,5 +1,6 @@
+ const fs = require('node:fs');
+ const path = require('node:path');
++const { seedJsonRecipes } = require('../services/jsonRecipes');
+ 
+ function initializeFoodData(database) {
+   const schemaPath = path.join(__dirname, '..', 'food_app_schema_final.sql');
+@@ -7,6 +8,7 @@ function initializeFoodData(database) {
+ 
+   database.exec(fs.readFileSync(schemaPath, 'utf8'));
+   database.exec(fs.readFileSync(samplePath, 'utf8'));
++  seedJsonRecipes(database);
+ }
+ 
+ module.exports = { initializeFoodData };
+diff --git a/backend/food-app-sample-data.sql b/backend/food-app-sample-data.sql
+index c0fe7a2..41a2811 100644
+--- a/backend/food-app-sample-data.sql
++++ b/backend/food-app-sample-data.sql
+@@ -117,6 +117,311 @@ FROM (
+ JOIN recipe r ON r.name = x.recipe
+ JOIN item i ON i.name = x.item;
+ 
++-- ---------------------------------------------------------------------------
++-- Indian recipes (vegetarian and non-vegetarian). Non-veg proteins, paneer and a few
++-- pantry staples are always available (no inventory lots). Recipes with no fresh
++-- required vegetable are not inventory-driven: the automatic planner skips them,
++-- but they can be planned by hand (dinner, lunch, guest special).
++-- ---------------------------------------------------------------------------
++INSERT OR IGNORE INTO item
++    (name, category, inventory_type, is_veg, default_shelf_life_days, always_available)
++VALUES
++    ('Karela', 'green_veggie', 'FRESH', 1, 5, 0),
++    ('Kaddu', 'green_veggie', 'FRESH', 1, 14, 0),
++    ('Mushroom', 'green_veggie', 'FRESH', 1, 5, 0),
++    ('Beetroot', 'green_veggie', 'FRESH', 1, 14, 0),
++    ('Broccoli', 'green_veggie', 'FRESH', 1, 5, 0),
++    ('Tinda', 'green_veggie', 'FRESH', 1, 6, 0),
++    ('Chicken', 'protein', 'STAPLE', 0, 3, 1),
++    ('Mutton', 'protein', 'STAPLE', 0, 3, 1),
++    ('Fish', 'protein', 'STAPLE', 0, 2, 1),
++    ('Prawns', 'protein', 'STAPLE', 0, 2, 1),
++    ('Eggs', 'protein', 'STAPLE', 0, 21, 1),
++    ('Paneer', 'protein', 'STAPLE', 1, 7, 1),
++    ('Soya Chunks', 'protein', 'STAPLE', 1, 365, 1),
++    ('Curd', 'staple', 'STAPLE', 1, 7, 1),
++    ('Cream', 'staple', 'STAPLE', 1, 7, 1),
++    ('Besan', 'staple', 'STAPLE', 1, 180, 1),
++    ('Basmati Rice', 'staple', 'STAPLE', 1, 365, 1),
++    ('Coconut', 'staple', 'STAPLE', 1, 30, 1),
++    ('Kasuri Methi', 'spice', 'STAPLE', 1, 365, 1),
++    ('Red Chili Powder', 'spice', 'STAPLE', 1, 365, 1),
++    ('Coriander Powder', 'spice', 'STAPLE', 1, 365, 1),
++    ('Mustard Seeds', 'spice', 'STAPLE', 1, 365, 1),
++    ('Urad Dal', 'dal', 'STAPLE', 1, 365, 1),
++    ('Kabuli Chana', 'dal', 'STAPLE', 1, 365, 1);
++
++INSERT OR IGNORE INTO recipe
++    (name, description, instructions, cuisine, meal_type, is_veg, is_frozen_friendly,
++     requires_soak_marination, soak_time_hours, suitable_for_kids_tiffin,
++     suitable_for_adult_tiffin, suitable_for_adult_dinner, approved, cooldown_days)
++VALUES
++    ('Dal Tadka', 'Yellow dal finished with a garlic-cumin tempering.', 'Pressure cook toor dal, then temper with cumin, garlic, onion and tomato.', 'Indian', 'dal', 1, 0, 0, 0, 0, 0, 1, 1, 21),
++    ('Dal Makhani', 'Slow-cooked black dal and rajma in a creamy tomato gravy.', 'Soak urad dal and rajma overnight, pressure cook, then simmer with tomato, ginger, garlic and cream.', 'Indian', 'dal', 1, 1, 1, 8, 0, 0, 1, 1, 21),
++    ('Chole (Punjabi)', 'Chickpeas in a tangy onion-tomato masala.', 'Soak chickpeas overnight, pressure cook, then simmer with onion, tomato and chole spices.', 'Indian', 'dal', 1, 1, 1, 8, 0, 0, 1, 1, 21),
++    ('Punjabi Kadhi', 'Yogurt and besan curry, gently spiced.', 'Whisk curd with besan, simmer with turmeric and temper with cumin and red chili.', 'Indian', 'dal', 1, 0, 0, 0, 1, 0, 1, 1, 21),
++    ('Palak Paneer', 'Paneer cubes in a smooth spinach gravy.', 'Blanch and blend spinach, cook with onion, garlic and ginger, then add paneer.', 'Indian', 'sabzi', 1, 1, 0, 0, 1, 0, 1, 1, 21),
++    ('Matar Paneer', 'Peas and paneer in a tomato-onion gravy.', 'Cook onion-tomato masala, add peas and paneer and simmer until tender.', 'Indian', 'sabzi', 1, 0, 0, 0, 1, 0, 1, 1, 21),
++    ('Paneer Butter Masala', 'Paneer in a mildly sweet-tart tomato and cream gravy.', 'Simmer blended tomato with butter and spices, then add paneer and cream.', 'Indian', 'sabzi', 1, 0, 0, 0, 1, 0, 1, 1, 21),
++    ('Kadai Paneer', 'Paneer and bell pepper tossed in a coarse kadai masala.', 'Saute bell pepper and onion, add ground kadai spices, tomato and paneer.', 'Indian', 'sabzi', 1, 0, 0, 0, 0, 0, 1, 1, 21),
++    ('Aloo Methi', 'Potato with fresh fenugreek leaves.', 'Saute potato with cumin, add chopped methi and cook until dry.', 'Indian', 'sabzi', 1, 0, 0, 0, 1, 0, 1, 1, 21),
++    ('Aloo Matar', 'Potato and peas in a light tomato gravy.', 'Cook potato and peas with onion, tomato and spices until tender.', 'Indian', 'sabzi', 1, 0, 0, 0, 1, 0, 1, 1, 21),
++    ('Aloo Baingan', 'Potato and eggplant stir-fried with spices.', 'Saute potato and baingan with cumin, turmeric and coriander until soft.', 'Indian', 'sabzi', 1, 0, 0, 0, 0, 0, 1, 1, 21),
++    ('Bhindi Do Pyaza', 'Okra cooked with onion in two stages.', 'Fry bhindi until crisp, then toss with sauteed onion and spices.', 'Indian', 'sabzi', 1, 0, 0, 0, 0, 0, 1, 1, 21),
++    ('Lauki Kofta', 'Bottle gourd dumplings in a light gravy.', 'Grate lauki, bind with besan, fry into koftas and simmer in tomato gravy.', 'Indian', 'sabzi', 1, 0, 0, 0, 1, 0, 1, 1, 21),
++    ('Karela Masala', 'Bitter gourd with onion and spices.', 'Slice and salt karela, squeeze, then saute with onion and spices.', 'Indian', 'sabzi', 1, 0, 0, 0, 0, 0, 1, 1, 21),
++    ('Kaddu Sabzi', 'Pumpkin cooked with fenugreek seeds and mild spices.', 'Temper with fenugreek seeds, add pumpkin cubes and cook covered until soft.', 'Indian', 'sabzi', 1, 0, 0, 0, 1, 0, 1, 1, 21),
++    ('Tinda Masala', 'Round gourd in a simple onion-tomato masala.', 'Peel and quarter tinda, cook with onion, tomato and spices until tender.', 'Indian', 'sabzi', 1, 0, 0, 0, 1, 0, 1, 1, 21),
++    ('Beetroot Poriyal', 'Grated beetroot stir-fried with mustard and coconut.', 'Temper mustard seeds, add grated beetroot and cook, then finish with coconut.', 'Indian', 'sabzi', 1, 0, 0, 0, 1, 0, 1, 1, 21),
++    ('Mushroom Matar', 'Mushrooms and peas in a spiced onion-tomato gravy.', 'Saute mushrooms, then cook with peas and onion-tomato masala.', 'Indian', 'sabzi', 1, 0, 0, 0, 0, 0, 1, 1, 21),
++    ('Broccoli Aloo', 'Broccoli florets with potato, dry-style.', 'Saute potato until half done, add broccoli and spices and cook until tender-crisp.', 'Indian', 'sabzi', 1, 0, 0, 0, 1, 0, 1, 1, 21),
++    ('Gobi Matar', 'Cauliflower and peas cooked dry with cumin.', 'Saute cauliflower and peas with cumin, turmeric and coriander.', 'Indian', 'sabzi', 1, 0, 0, 0, 1, 0, 1, 1, 21),
++    ('Patta Gobi Sabzi', 'Shredded cabbage with mustard and turmeric.', 'Temper mustard, add shredded cabbage and cook until just tender.', 'Indian', 'sabzi', 1, 0, 0, 0, 1, 0, 1, 1, 21),
++    ('Green Beans Poriyal', 'Green beans with coconut and mustard.', 'Temper mustard, add chopped beans and cook, then finish with coconut.', 'Indian', 'sabzi', 1, 0, 0, 0, 1, 0, 1, 1, 21),
++    ('Methi Malai Matar', 'Peas and fenugreek in a mild cream gravy.', 'Saute methi, add cashew-onion paste, peas and a splash of cream.', 'Indian', 'sabzi', 1, 0, 0, 0, 0, 0, 1, 1, 21),
++    ('Vegetable Pulao', 'Basmati rice cooked with carrot and whole spices.', 'Saute whole spices and vegetables, add soaked rice and water, and cook until fluffy.', 'Indian', 'rice', 1, 0, 0, 0, 1, 0, 1, 1, 21),
++    ('Jeera Rice', 'Basmati rice tempered with cumin.', 'Temper cumin in oil, add soaked basmati and water, and cook until fluffy.', 'Indian', 'rice', 1, 0, 0, 0, 1, 0, 1, 1, 21),
++    ('Vegetable Biryani', 'Layered basmati rice with cauliflower and peas.', 'Par-cook rice, layer with spiced cauliflower and peas, and steam.', 'Indian', 'rice', 1, 0, 0, 0, 0, 0, 1, 1, 21),
++    ('Butter Chicken', 'Tandoori-style chicken in a creamy tomato gravy.', 'Marinate chicken in curd and spices, cook, then simmer in tomato-butter gravy with cream.', 'Indian', 'curry', 0, 1, 1, 4, 0, 0, 1, 1, 21),
++    ('Chicken Curry', 'Everyday onion-tomato chicken curry.', 'Brown onion, add ginger-garlic, tomato and spices, then simmer chicken until tender.', 'Indian', 'curry', 0, 1, 0, 0, 0, 0, 1, 1, 21),
++    ('Chicken Tikka Masala', 'Grilled chicken tikka in a spiced tomato gravy.', 'Marinate chicken in curd and spices, grill, then simmer in masala gravy.', 'Indian', 'curry', 0, 0, 1, 4, 0, 0, 1, 1, 21),
++    ('Kadai Chicken', 'Chicken with bell pepper in a coarse kadai masala.', 'Saute bell pepper and onion, add kadai spices, tomato and chicken, and cook until done.', 'Indian', 'curry', 0, 0, 0, 0, 0, 0, 1, 1, 21),
++    ('Palak Chicken', 'Chicken cooked in a spinach gravy.', 'Blend blanched spinach, cook with onion-garlic masala, then add chicken and simmer.', 'Indian', 'curry', 0, 0, 0, 0, 0, 0, 1, 1, 21),
++    ('Methi Chicken', 'Chicken with fresh fenugreek leaves.', 'Cook onion-tomato masala, add chicken and chopped methi and simmer.', 'Indian', 'curry', 0, 0, 0, 0, 0, 0, 1, 1, 21),
++    ('Chicken Biryani', 'Layered basmati rice with marinated chicken.', 'Marinate chicken in curd and spices, par-cook rice, layer both and steam on low heat.', 'Indian', 'rice', 0, 0, 1, 4, 0, 0, 1, 1, 21),
++    ('Tandoori Chicken', 'Chicken marinated in curd and spices, roasted until charred.', 'Marinate chicken for six hours, then roast or grill until cooked through.', 'Indian', 'curry', 0, 0, 1, 6, 0, 0, 1, 1, 21),
++    ('Chicken Korma', 'Chicken in a mild cashew and yogurt gravy.', 'Cook chicken with fried onion, curd and ground nuts on low heat.', 'Indian', 'curry', 0, 0, 0, 0, 0, 0, 1, 1, 21),
++    ('Chicken Do Pyaza', 'Chicken with onions added at two stages.', 'Cook chicken in onion masala, then add quartered onion near the end.', 'Indian', 'curry', 0, 0, 0, 0, 0, 0, 1, 1, 21),
++    ('Chicken Keema', 'Minced chicken cooked dry with spices.', 'Cook onion, ginger and garlic, add minced chicken and spices and cook until dry.', 'Indian', 'curry', 0, 1, 0, 0, 0, 0, 1, 1, 21),
++    ('Keema Matar', 'Minced mutton with peas.', 'Cook mutton mince with onion-tomato masala, add peas and finish dry.', 'Indian', 'curry', 0, 1, 0, 0, 0, 0, 1, 1, 21),
++    ('Mutton Rogan Josh', 'Kashmiri-style mutton in a red chili and yogurt gravy.', 'Marinate mutton, then cook slowly with whole spices and gravy until tender.', 'Indian', 'curry', 0, 1, 1, 4, 0, 0, 1, 1, 21),
++    ('Mutton Curry', 'Slow-cooked mutton in an onion gravy.', 'Brown onion, add ginger-garlic and spices, then pressure cook mutton until tender.', 'Indian', 'curry', 0, 1, 0, 0, 0, 0, 1, 1, 21),
++    ('Saag Gosht', 'Mutton cooked with spinach.', 'Cook mutton with onion masala, then add blended spinach and simmer.', 'Indian', 'curry', 0, 0, 0, 0, 0, 0, 1, 1, 21),
++    ('Egg Curry', 'Boiled eggs in an onion-tomato gravy.', 'Make onion-tomato masala, add halved boiled eggs and simmer briefly.', 'Indian', 'curry', 0, 0, 0, 0, 1, 0, 1, 1, 21),
++    ('Egg Bhurji', 'Scrambled eggs with onion, tomato and green chili.', 'Saute onion, tomato and chili, then add beaten eggs and scramble.', 'Indian', 'curry', 0, 0, 0, 0, 1, 0, 1, 1, 21),
++    ('Fish Curry', 'Fish in a tangy tomato and onion gravy.', 'Make masala with onion and tomato, add fish and simmer gently for a few minutes.', 'Indian', 'curry', 0, 0, 0, 0, 0, 0, 1, 1, 21),
++    ('Goan Fish Curry', 'Fish in a coconut and red chili gravy.', 'Grind coconut with chilies, simmer with tamarind and add fish near the end.', 'Indian', 'curry', 0, 0, 0, 0, 0, 0, 1, 1, 21),
++    ('Prawn Masala', 'Prawns in a thick onion-tomato masala.', 'Cook masala until oil separates, add prawns and cook for a few minutes.', 'Indian', 'curry', 0, 0, 0, 0, 0, 0, 1, 1, 21);
++
++INSERT OR IGNORE INTO recipe_item (recipe_id, item_id, role)
++SELECT r.id, i.id, x.role
++FROM (
++    SELECT 'Dal Tadka' AS recipe, 'Toor Dal' AS item, 'REQUIRED' AS role
++    UNION ALL SELECT 'Dal Tadka', 'Onion', 'OPTIONAL'
++    UNION ALL SELECT 'Dal Tadka', 'Tomato', 'OPTIONAL'
++    UNION ALL SELECT 'Dal Tadka', 'Garlic', 'OPTIONAL'
++    UNION ALL SELECT 'Dal Tadka', 'Cumin', 'OPTIONAL'
++    UNION ALL SELECT 'Dal Makhani', 'Urad Dal', 'REQUIRED'
++    UNION ALL SELECT 'Dal Makhani', 'Rajma', 'REQUIRED'
++    UNION ALL SELECT 'Dal Makhani', 'Cream', 'OPTIONAL'
++    UNION ALL SELECT 'Dal Makhani', 'Tomato', 'OPTIONAL'
++    UNION ALL SELECT 'Dal Makhani', 'Ginger', 'OPTIONAL'
++    UNION ALL SELECT 'Dal Makhani', 'Garlic', 'OPTIONAL'
++    UNION ALL SELECT 'Chole (Punjabi)', 'Kabuli Chana', 'REQUIRED'
++    UNION ALL SELECT 'Chole (Punjabi)', 'Onion', 'OPTIONAL'
++    UNION ALL SELECT 'Chole (Punjabi)', 'Tomato', 'OPTIONAL'
++    UNION ALL SELECT 'Chole (Punjabi)', 'Ginger', 'OPTIONAL'
++    UNION ALL SELECT 'Chole (Punjabi)', 'Garam Masala', 'OPTIONAL'
++    UNION ALL SELECT 'Punjabi Kadhi', 'Curd', 'REQUIRED'
++    UNION ALL SELECT 'Punjabi Kadhi', 'Besan', 'REQUIRED'
++    UNION ALL SELECT 'Punjabi Kadhi', 'Cumin', 'OPTIONAL'
++    UNION ALL SELECT 'Punjabi Kadhi', 'Turmeric', 'OPTIONAL'
++    UNION ALL SELECT 'Punjabi Kadhi', 'Onion', 'OPTIONAL'
++    UNION ALL SELECT 'Palak Paneer', 'Spinach', 'REQUIRED'
++    UNION ALL SELECT 'Palak Paneer', 'Paneer', 'REQUIRED'
++    UNION ALL SELECT 'Palak Paneer', 'Onion', 'OPTIONAL'
++    UNION ALL SELECT 'Palak Paneer', 'Garlic', 'OPTIONAL'
++    UNION ALL SELECT 'Palak Paneer', 'Ginger', 'OPTIONAL'
++    UNION ALL SELECT 'Palak Paneer', 'Cream', 'OPTIONAL'
++    UNION ALL SELECT 'Matar Paneer', 'Peas', 'REQUIRED'
++    UNION ALL SELECT 'Matar Paneer', 'Paneer', 'REQUIRED'
++    UNION ALL SELECT 'Matar Paneer', 'Onion', 'OPTIONAL'
++    UNION ALL SELECT 'Matar Paneer', 'Tomato', 'OPTIONAL'
++    UNION ALL SELECT 'Matar Paneer', 'Garam Masala', 'OPTIONAL'
++    UNION ALL SELECT 'Paneer Butter Masala', 'Paneer', 'REQUIRED'
++    UNION ALL SELECT 'Paneer Butter Masala', 'Tomato', 'OPTIONAL'
++    UNION ALL SELECT 'Paneer Butter Masala', 'Cream', 'OPTIONAL'
++    UNION ALL SELECT 'Paneer Butter Masala', 'Kasuri Methi', 'OPTIONAL'
++    UNION ALL SELECT 'Kadai Paneer', 'Bell Pepper', 'REQUIRED'
++    UNION ALL SELECT 'Kadai Paneer', 'Paneer', 'REQUIRED'
++    UNION ALL SELECT 'Kadai Paneer', 'Onion', 'OPTIONAL'
++    UNION ALL SELECT 'Kadai Paneer', 'Tomato', 'OPTIONAL'
++    UNION ALL SELECT 'Kadai Paneer', 'Coriander Powder', 'OPTIONAL'
++    UNION ALL SELECT 'Aloo Methi', 'Methi', 'REQUIRED'
++    UNION ALL SELECT 'Aloo Methi', 'Potato', 'REQUIRED'
++    UNION ALL SELECT 'Aloo Methi', 'Garlic', 'OPTIONAL'
++    UNION ALL SELECT 'Aloo Methi', 'Green Chili', 'OPTIONAL'
++    UNION ALL SELECT 'Aloo Matar', 'Peas', 'REQUIRED'
++    UNION ALL SELECT 'Aloo Matar', 'Potato', 'REQUIRED'
++    UNION ALL SELECT 'Aloo Matar', 'Onion', 'OPTIONAL'
++    UNION ALL SELECT 'Aloo Matar', 'Tomato', 'OPTIONAL'
++    UNION ALL SELECT 'Aloo Matar', 'Cumin', 'OPTIONAL'
++    UNION ALL SELECT 'Aloo Baingan', 'Baingan', 'REQUIRED'
++    UNION ALL SELECT 'Aloo Baingan', 'Potato', 'REQUIRED'
++    UNION ALL SELECT 'Aloo Baingan', 'Onion', 'OPTIONAL'
++    UNION ALL SELECT 'Aloo Baingan', 'Tomato', 'OPTIONAL'
++    UNION ALL SELECT 'Bhindi Do Pyaza', 'Bhindi', 'REQUIRED'
++    UNION ALL SELECT 'Bhindi Do Pyaza', 'Onion', 'REQUIRED'
++    UNION ALL SELECT 'Bhindi Do Pyaza', 'Tomato', 'OPTIONAL'
++    UNION ALL SELECT 'Bhindi Do Pyaza', 'Coriander Powder', 'OPTIONAL'
++    UNION ALL SELECT 'Lauki Kofta', 'Lauki', 'REQUIRED'
++    UNION ALL SELECT 'Lauki Kofta', 'Besan', 'REQUIRED'
++    UNION ALL SELECT 'Lauki Kofta', 'Onion', 'OPTIONAL'
++    UNION ALL SELECT 'Lauki Kofta', 'Tomato', 'OPTIONAL'
++    UNION ALL SELECT 'Lauki Kofta', 'Garam Masala', 'OPTIONAL'
++    UNION ALL SELECT 'Karela Masala', 'Karela', 'REQUIRED'
++    UNION ALL SELECT 'Karela Masala', 'Onion', 'OPTIONAL'
++    UNION ALL SELECT 'Karela Masala', 'Turmeric', 'OPTIONAL'
++    UNION ALL SELECT 'Karela Masala', 'Coriander Powder', 'OPTIONAL'
++    UNION ALL SELECT 'Kaddu Sabzi', 'Kaddu', 'REQUIRED'
++    UNION ALL SELECT 'Kaddu Sabzi', 'Turmeric', 'OPTIONAL'
++    UNION ALL SELECT 'Kaddu Sabzi', 'Red Chili Powder', 'OPTIONAL'
++    UNION ALL SELECT 'Kaddu Sabzi', 'Cumin', 'OPTIONAL'
++    UNION ALL SELECT 'Tinda Masala', 'Tinda', 'REQUIRED'
++    UNION ALL SELECT 'Tinda Masala', 'Onion', 'OPTIONAL'
++    UNION ALL SELECT 'Tinda Masala', 'Tomato', 'OPTIONAL'
++    UNION ALL SELECT 'Tinda Masala', 'Coriander Powder', 'OPTIONAL'
++    UNION ALL SELECT 'Beetroot Poriyal', 'Beetroot', 'REQUIRED'
++    UNION ALL SELECT 'Beetroot Poriyal', 'Coconut', 'OPTIONAL'
++    UNION ALL SELECT 'Beetroot Poriyal', 'Mustard Seeds', 'OPTIONAL'
++    UNION ALL SELECT 'Mushroom Matar', 'Mushroom', 'REQUIRED'
++    UNION ALL SELECT 'Mushroom Matar', 'Peas', 'OPTIONAL'
++    UNION ALL SELECT 'Mushroom Matar', 'Onion', 'OPTIONAL'
++    UNION ALL SELECT 'Mushroom Matar', 'Tomato', 'OPTIONAL'
++    UNION ALL SELECT 'Broccoli Aloo', 'Broccoli', 'REQUIRED'
++    UNION ALL SELECT 'Broccoli Aloo', 'Potato', 'REQUIRED'
++    UNION ALL SELECT 'Broccoli Aloo', 'Garlic', 'OPTIONAL'
++    UNION ALL SELECT 'Broccoli Aloo', 'Cumin', 'OPTIONAL'
++    UNION ALL SELECT 'Gobi Matar', 'Cauliflower', 'REQUIRED'
++    UNION ALL SELECT 'Gobi Matar', 'Peas', 'OPTIONAL'
++    UNION ALL SELECT 'Gobi Matar', 'Ginger', 'OPTIONAL'
++    UNION ALL SELECT 'Gobi Matar', 'Cumin', 'OPTIONAL'
++    UNION ALL SELECT 'Patta Gobi Sabzi', 'Cabbage', 'REQUIRED'
++    UNION ALL SELECT 'Patta Gobi Sabzi', 'Mustard Seeds', 'OPTIONAL'
++    UNION ALL SELECT 'Patta Gobi Sabzi', 'Turmeric', 'OPTIONAL'
++    UNION ALL SELECT 'Patta Gobi Sabzi', 'Green Chili', 'OPTIONAL'
++    UNION ALL SELECT 'Green Beans Poriyal', 'Green Beans', 'REQUIRED'
++    UNION ALL SELECT 'Green Beans Poriyal', 'Coconut', 'OPTIONAL'
++    UNION ALL SELECT 'Green Beans Poriyal', 'Mustard Seeds', 'OPTIONAL'
++    UNION ALL SELECT 'Methi Malai Matar', 'Methi', 'REQUIRED'
++    UNION ALL SELECT 'Methi Malai Matar', 'Peas', 'REQUIRED'
++    UNION ALL SELECT 'Methi Malai Matar', 'Cream', 'OPTIONAL'
++    UNION ALL SELECT 'Methi Malai Matar', 'Onion', 'OPTIONAL'
++    UNION ALL SELECT 'Vegetable Pulao', 'Basmati Rice', 'REQUIRED'
++    UNION ALL SELECT 'Vegetable Pulao', 'Carrot', 'REQUIRED'
++    UNION ALL SELECT 'Vegetable Pulao', 'Peas', 'OPTIONAL'
++    UNION ALL SELECT 'Vegetable Pulao', 'Green Beans', 'OPTIONAL'
++    UNION ALL SELECT 'Vegetable Pulao', 'Cumin', 'OPTIONAL'
++    UNION ALL SELECT 'Jeera Rice', 'Basmati Rice', 'REQUIRED'
++    UNION ALL SELECT 'Jeera Rice', 'Cumin', 'OPTIONAL'
++    UNION ALL SELECT 'Vegetable Biryani', 'Basmati Rice', 'REQUIRED'
++    UNION ALL SELECT 'Vegetable Biryani', 'Cauliflower', 'REQUIRED'
++    UNION ALL SELECT 'Vegetable Biryani', 'Peas', 'OPTIONAL'
++    UNION ALL SELECT 'Vegetable Biryani', 'Curd', 'OPTIONAL'
++    UNION ALL SELECT 'Vegetable Biryani', 'Garam Masala', 'OPTIONAL'
++    UNION ALL SELECT 'Butter Chicken', 'Chicken', 'REQUIRED'
++    UNION ALL SELECT 'Butter Chicken', 'Curd', 'OPTIONAL'
++    UNION ALL SELECT 'Butter Chicken', 'Cream', 'OPTIONAL'
++    UNION ALL SELECT 'Butter Chicken', 'Kasuri Methi', 'OPTIONAL'
++    UNION ALL SELECT 'Butter Chicken', 'Tomato', 'OPTIONAL'
++    UNION ALL SELECT 'Chicken Curry', 'Chicken', 'REQUIRED'
++    UNION ALL SELECT 'Chicken Curry', 'Onion', 'OPTIONAL'
++    UNION ALL SELECT 'Chicken Curry', 'Tomato', 'OPTIONAL'
++    UNION ALL SELECT 'Chicken Curry', 'Ginger', 'OPTIONAL'
++    UNION ALL SELECT 'Chicken Curry', 'Garlic', 'OPTIONAL'
++    UNION ALL SELECT 'Chicken Curry', 'Garam Masala', 'OPTIONAL'
++    UNION ALL SELECT 'Chicken Tikka Masala', 'Chicken', 'REQUIRED'
++    UNION ALL SELECT 'Chicken Tikka Masala', 'Curd', 'OPTIONAL'
++    UNION ALL SELECT 'Chicken Tikka Masala', 'Tomato', 'OPTIONAL'
++    UNION ALL SELECT 'Chicken Tikka Masala', 'Cream', 'OPTIONAL'
++    UNION ALL SELECT 'Chicken Tikka Masala', 'Kasuri Methi', 'OPTIONAL'
++    UNION ALL SELECT 'Kadai Chicken', 'Chicken', 'REQUIRED'
++    UNION ALL SELECT 'Kadai Chicken', 'Bell Pepper', 'REQUIRED'
++    UNION ALL SELECT 'Kadai Chicken', 'Onion', 'OPTIONAL'
++    UNION ALL SELECT 'Kadai Chicken', 'Tomato', 'OPTIONAL'
++    UNION ALL SELECT 'Kadai Chicken', 'Coriander Powder', 'OPTIONAL'
++    UNION ALL SELECT 'Palak Chicken', 'Chicken', 'REQUIRED'
++    UNION ALL SELECT 'Palak Chicken', 'Spinach', 'REQUIRED'
++    UNION ALL SELECT 'Palak Chicken', 'Onion', 'OPTIONAL'
++    UNION ALL SELECT 'Palak Chicken', 'Garlic', 'OPTIONAL'
++    UNION ALL SELECT 'Palak Chicken', 'Ginger', 'OPTIONAL'
++    UNION ALL SELECT 'Methi Chicken', 'Chicken', 'REQUIRED'
++    UNION ALL SELECT 'Methi Chicken', 'Methi', 'REQUIRED'
++    UNION ALL SELECT 'Methi Chicken', 'Onion', 'OPTIONAL'
++    UNION ALL SELECT 'Methi Chicken', 'Tomato', 'OPTIONAL'
++    UNION ALL SELECT 'Methi Chicken', 'Kasuri Methi', 'OPTIONAL'
++    UNION ALL SELECT 'Chicken Biryani', 'Chicken', 'REQUIRED'
++    UNION ALL SELECT 'Chicken Biryani', 'Basmati Rice', 'REQUIRED'
++    UNION ALL SELECT 'Chicken Biryani', 'Curd', 'OPTIONAL'
++    UNION ALL SELECT 'Chicken Biryani', 'Onion', 'OPTIONAL'
++    UNION ALL SELECT 'Chicken Biryani', 'Garam Masala', 'OPTIONAL'
++    UNION ALL SELECT 'Tandoori Chicken', 'Chicken', 'REQUIRED'
++    UNION ALL SELECT 'Tandoori Chicken', 'Curd', 'OPTIONAL'
++    UNION ALL SELECT 'Tandoori Chicken', 'Ginger', 'OPTIONAL'
++    UNION ALL SELECT 'Tandoori Chicken', 'Garlic', 'OPTIONAL'
++    UNION ALL SELECT 'Tandoori Chicken', 'Red Chili Powder', 'OPTIONAL'
++    UNION ALL SELECT 'Chicken Korma', 'Chicken', 'REQUIRED'
++    UNION ALL SELECT 'Chicken Korma', 'Curd', 'OPTIONAL'
++    UNION ALL SELECT 'Chicken Korma', 'Onion', 'OPTIONAL'
++    UNION ALL SELECT 'Chicken Korma', 'Cream', 'OPTIONAL'
++    UNION ALL SELECT 'Chicken Do Pyaza', 'Chicken', 'REQUIRED'
++    UNION ALL SELECT 'Chicken Do Pyaza', 'Onion', 'REQUIRED'
++    UNION ALL SELECT 'Chicken Do Pyaza', 'Tomato', 'OPTIONAL'
++    UNION ALL SELECT 'Chicken Do Pyaza', 'Garam Masala', 'OPTIONAL'
++    UNION ALL SELECT 'Chicken Keema', 'Chicken', 'REQUIRED'
++    UNION ALL SELECT 'Chicken Keema', 'Onion', 'OPTIONAL'
++    UNION ALL SELECT 'Chicken Keema', 'Ginger', 'OPTIONAL'
++    UNION ALL SELECT 'Chicken Keema', 'Garlic', 'OPTIONAL'
++    UNION ALL SELECT 'Chicken Keema', 'Green Chili', 'OPTIONAL'
++    UNION ALL SELECT 'Keema Matar', 'Mutton', 'REQUIRED'
++    UNION ALL SELECT 'Keema Matar', 'Peas', 'REQUIRED'
++    UNION ALL SELECT 'Keema Matar', 'Onion', 'OPTIONAL'
++    UNION ALL SELECT 'Keema Matar', 'Tomato', 'OPTIONAL'
++    UNION ALL SELECT 'Keema Matar', 'Ginger', 'OPTIONAL'
++    UNION ALL SELECT 'Keema Matar', 'Garlic', 'OPTIONAL'
++    UNION ALL SELECT 'Mutton Rogan Josh', 'Mutton', 'REQUIRED'
++    UNION ALL SELECT 'Mutton Rogan Josh', 'Curd', 'OPTIONAL'
++    UNION ALL SELECT 'Mutton Rogan Josh', 'Red Chili Powder', 'OPTIONAL'
++    UNION ALL SELECT 'Mutton Rogan Josh', 'Ginger', 'OPTIONAL'
++    UNION ALL SELECT 'Mutton Curry', 'Mutton', 'REQUIRED'
++    UNION ALL SELECT 'Mutton Curry', 'Onion', 'OPTIONAL'
++    UNION ALL SELECT 'Mutton Curry', 'Tomato', 'OPTIONAL'
++    UNION ALL SELECT 'Mutton Curry', 'Ginger', 'OPTIONAL'
++    UNION ALL SELECT 'Mutton Curry', 'Garlic', 'OPTIONAL'
++    UNION ALL SELECT 'Mutton Curry', 'Garam Masala', 'OPTIONAL'
++    UNION ALL SELECT 'Saag Gosht', 'Mutton', 'REQUIRED'
++    UNION ALL SELECT 'Saag Gosht', 'Spinach', 'REQUIRED'
++    UNION ALL SELECT 'Saag Gosht', 'Onion', 'OPTIONAL'
++    UNION ALL SELECT 'Saag Gosht', 'Ginger', 'OPTIONAL'
++    UNION ALL SELECT 'Saag Gosht', 'Garlic', 'OPTIONAL'
++    UNION ALL SELECT 'Egg Curry', 'Eggs', 'REQUIRED'
++    UNION ALL SELECT 'Egg Curry', 'Onion', 'OPTIONAL'
++    UNION ALL SELECT 'Egg Curry', 'Tomato', 'OPTIONAL'
++    UNION ALL SELECT 'Egg Curry', 'Garam Masala', 'OPTIONAL'
++    UNION ALL SELECT 'Egg Bhurji', 'Eggs', 'REQUIRED'
++    UNION ALL SELECT 'Egg Bhurji', 'Onion', 'OPTIONAL'
++    UNION ALL SELECT 'Egg Bhurji', 'Tomato', 'OPTIONAL'
++    UNION ALL SELECT 'Egg Bhurji', 'Green Chili', 'OPTIONAL'
++    UNION ALL SELECT 'Egg Bhurji', 'Cilantro', 'OPTIONAL'
++    UNION ALL SELECT 'Fish Curry', 'Fish', 'REQUIRED'
++    UNION ALL SELECT 'Fish Curry', 'Onion', 'OPTIONAL'
++    UNION ALL SELECT 'Fish Curry', 'Tomato', 'OPTIONAL'
++    UNION ALL SELECT 'Fish Curry', 'Turmeric', 'OPTIONAL'
++    UNION ALL SELECT 'Fish Curry', 'Red Chili Powder', 'OPTIONAL'
++    UNION ALL SELECT 'Goan Fish Curry', 'Fish', 'REQUIRED'
++    UNION ALL SELECT 'Goan Fish Curry', 'Coconut', 'REQUIRED'
++    UNION ALL SELECT 'Goan Fish Curry', 'Red Chili Powder', 'OPTIONAL'
++    UNION ALL SELECT 'Goan Fish Curry', 'Turmeric', 'OPTIONAL'
++    UNION ALL SELECT 'Goan Fish Curry', 'Mustard Seeds', 'OPTIONAL'
++    UNION ALL SELECT 'Prawn Masala', 'Prawns', 'REQUIRED'
++    UNION ALL SELECT 'Prawn Masala', 'Onion', 'OPTIONAL'
++    UNION ALL SELECT 'Prawn Masala', 'Tomato', 'OPTIONAL'
++    UNION ALL SELECT 'Prawn Masala', 'Ginger', 'OPTIONAL'
++    UNION ALL SELECT 'Prawn Masala', 'Garlic', 'OPTIONAL'
++) AS x
++JOIN recipe r ON r.name = x.recipe
++JOIN item i ON i.name = x.item;
++
+ -- Purchase lots stay distinct, including the two Bhindi purchases.
+ INSERT INTO inventory (item_id, purchase_date, expiry_date, store, status)
+ SELECT i.id, '2026-09-22', '2026-09-27', 'Costco', 'AVAILABLE'
+diff --git a/backend/food_app_schema_final.sql b/backend/food_app_schema_final.sql
+index e0c39e8..2d570c5 100644
+--- a/backend/food_app_schema_final.sql
++++ b/backend/food_app_schema_final.sql
+@@ -197,7 +197,7 @@ CREATE TABLE IF NOT EXISTS weekly_meal_plan (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     recipe_id INTEGER NOT NULL,
+     meal_date TEXT NOT NULL,
+-    meal_slot TEXT NOT NULL CHECK (meal_slot IN ('kids_tiffin', 'adult_tiffin', 'dinner', 'weekend_lunch')),
++    meal_slot TEXT NOT NULL, -- validated by the API: kids_tiffin, adult_tiffin, dinner, weekend_lunch, breakfast, sides, guest_special
+     tiffin_kid_slot TEXT CHECK (tiffin_kid_slot IN ('AM', 'PM')),
+     tiffin_adult_cycle_day INTEGER CHECK (tiffin_adult_cycle_day IN (1, 2)),
+     status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'confirmed_cooked', 'confirmed_skipped', 'other', 'replaced')),
+diff --git a/backend/migrations/001_weekly_meal_plan_drop_slot_check.sql b/backend/migrations/001_weekly_meal_plan_drop_slot_check.sql
+new file mode 100644
+index 0000000..d3a21c4
+--- /dev/null
++++ b/backend/migrations/001_weekly_meal_plan_drop_slot_check.sql
+@@ -0,0 +1,68 @@
++-- ============================================================================
++-- 001_weekly_meal_plan_drop_slot_check.sql            (SQLite, run BEFORE deploying the code patch)
++--
++-- Why: weekly_meal_plan.meal_slot has a CHECK that only allows
++--      kids_tiffin / adult_tiffin / dinner / weekend_lunch.
++--      The app now also writes: breakfast, sides, guest_special.
++--      SQLite cannot "ALTER TABLE ... DROP CONSTRAINT", so the table is
++--      rebuilt with the same columns, defaults, FKs and indexes, MINUS the
++--      meal_slot CHECK. Slot names are validated by the API instead.
++--      Every other CHECK (tiffin_kid_slot, tiffin_adult_cycle_day, status) is kept.
++--
++-- What it does NOT touch: any other table. Row ids are preserved, so
++--      meal_confirmation_log.plan_id keeps pointing at the right rows.
++--
++-- How to run (stop the API first):
++--   1. cp backend/data/food-app.sqlite backend/data/food-app.sqlite.bak
++--      (with WAL mode also copy the -wal and -shm files, or run
++--       `sqlite3 food-app.sqlite "PRAGMA wal_checkpoint(TRUNCATE);"` first)
++--   2. sqlite3 backend/data/food-app.sqlite < 001_weekly_meal_plan_drop_slot_check.sql
++--   3. Expect no output from the two verification queries at the bottom
++--      (foreign_key_check returns nothing; the row counts match).
++--
++-- Safe to re-run: it rebuilds the table again with the same result.
++-- Rollback: stop the API, then restore the .bak copy.
++-- ============================================================================
++
++PRAGMA foreign_keys = OFF;   -- must be set outside the transaction
++
++BEGIN TRANSACTION;
++
++DROP TABLE IF EXISTS weekly_meal_plan_new;
++
++CREATE TABLE weekly_meal_plan_new (
++    id INTEGER PRIMARY KEY AUTOINCREMENT,
++    recipe_id INTEGER NOT NULL,
++    meal_date TEXT NOT NULL,
++    meal_slot TEXT NOT NULL,
++    tiffin_kid_slot TEXT CHECK (tiffin_kid_slot IN ('AM', 'PM')),
++    tiffin_adult_cycle_day INTEGER CHECK (tiffin_adult_cycle_day IN (1, 2)),
++    status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'confirmed_cooked', 'confirmed_skipped', 'other', 'replaced')),
++    notified_at TEXT,
++    retry_sent_at TEXT,
++    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
++    FOREIGN KEY (recipe_id) REFERENCES recipe(id)
++);
++
++INSERT INTO weekly_meal_plan_new
++    (id, recipe_id, meal_date, meal_slot, tiffin_kid_slot, tiffin_adult_cycle_day,
++     status, notified_at, retry_sent_at, created_at)
++SELECT id, recipe_id, meal_date, meal_slot, tiffin_kid_slot, tiffin_adult_cycle_day,
++       status, notified_at, retry_sent_at, created_at
++FROM weekly_meal_plan;
++
++DROP TABLE weekly_meal_plan;                          -- drops its old indexes too
++ALTER TABLE weekly_meal_plan_new RENAME TO weekly_meal_plan;
++
++CREATE INDEX IF NOT EXISTS idx_weekly_meal_plan_date ON weekly_meal_plan(meal_date);
++CREATE INDEX IF NOT EXISTS idx_weekly_meal_plan_recipe ON weekly_meal_plan(recipe_id);
++CREATE INDEX IF NOT EXISTS idx_weekly_meal_plan_status ON weekly_meal_plan(status);
++CREATE INDEX IF NOT EXISTS idx_weekly_meal_plan_date_status ON weekly_meal_plan(meal_date, status);
++
++COMMIT;
++
++PRAGMA foreign_keys = ON;
++
++-- Verification: both should print nothing / matching counts.
++PRAGMA foreign_key_check;
++SELECT COUNT(*) AS plan_rows_after FROM weekly_meal_plan;
+diff --git a/backend/routes/food.js b/backend/routes/food.js
+index 55573a3..36076ed 100644
+--- a/backend/routes/food.js
++++ b/backend/routes/food.js
+@@ -2,6 +2,16 @@ const express = require('express');
+ const { rules } = require('../services/rules');
+ const { isDate, dateOffset, isMonday, localDateString } = require('../services/dates');
+ const { generateWeek } = require('../services/mealPlanner');
++const {
++  SLOT,
++  MEAL_SLOTS: MEAL_SLOT_NAMES,
++  UNCONFIRMED_SLOTS,
++  MEAL_TYPE,
++  NON_MAIN_MEAL_TYPES,
++  SIDES_SLOT_MEAL_TYPES,
++  sqlList,
++} = require('../services/slots');
++const { loadBreakfastIdeas } = require('../services/jsonRecipes');
+ const {
+   RESPONSE,
+   applyMealResponse,
+@@ -14,8 +24,8 @@ const WEEK_DAYS = 7;
+ const DAY_MILLISECONDS = 86400000;
+ const DAL_INTERVAL_DAYS = 2;
+ const FRESHNESS_SOON_DAYS = 2;
+-const MEAL_SLOTS = new Set(['kids_tiffin', 'adult_tiffin', 'dinner', 'weekend_lunch']);
+-const AUTO_COOK_MEAL_SLOTS = ['kids_tiffin', 'dinner', 'weekend_lunch'];
++const MEAL_SLOTS = new Set(MEAL_SLOT_NAMES);
++const AUTO_COOK_MEAL_SLOTS = [SLOT.KIDS_TIFFIN, SLOT.DINNER, SLOT.WEEKEND_LUNCH];
+ const INVENTORY_STATUS_FILTERS = new Set(['AVAILABLE', 'USED', 'DISCARDED', 'ALL']);
+ const INVENTORY_ROW_LIMIT = 500;
+ 
+@@ -162,7 +172,66 @@ function createFoodRouter(database) {
+       || first.name.localeCompare(second.name));
+   }
+ 
++  // Main dishes that need no fresh vegetable: every REQUIRED ingredient is
++  // always available (chicken, paneer, pantry dals ...). They never enter the
++  // automatic planner, but they can be planned by hand.
++  function getPantryRecipes() {
++    return database.prepare(`
++      SELECT r.id, r.name, r.meal_type, r.suitable_for_kids_tiffin,
++             r.suitable_for_adult_tiffin, r.suitable_for_adult_dinner
++      FROM recipe r
++      WHERE r.approved = 1
++        AND COALESCE(r.meal_type, '') NOT IN (${sqlList(NON_MAIN_MEAL_TYPES)})
++        AND EXISTS (
++          SELECT 1 FROM recipe_item ri WHERE ri.recipe_id = r.id AND ri.role = 'REQUIRED'
++        )
++        AND NOT EXISTS (
++          SELECT 1
++          FROM recipe_item ri JOIN item i ON i.id = ri.item_id
++          WHERE ri.recipe_id = r.id AND ri.role = 'REQUIRED'
++            AND (i.inventory_type = 'FRESH' OR i.always_available = 0)
++        )
++      ORDER BY r.name
++    `).all(...NON_MAIN_MEAL_TYPES).map((row) => ({
++      id: row.id,
++      name: row.name,
++      mealType: row.meal_type,
++      suitableForKidsTiffin: Boolean(row.suitable_for_kids_tiffin),
++      suitableForAdultTiffin: Boolean(row.suitable_for_adult_tiffin),
++      suitableForAdultDinner: Boolean(row.suitable_for_adult_dinner),
++    }));
++  }
++
++  function recipesByMealType(mealTypes) {
++    return database.prepare(`
++      SELECT id, name, meal_type FROM recipe
++      WHERE approved = 1 AND meal_type IN (${sqlList(mealTypes)})
++      ORDER BY name
++    `).all(...mealTypes).map((row) => ({ id: row.id, name: row.name, mealType: row.meal_type }));
++  }
++
++  // Every recipe that may be planned into `slot` by hand, one list per slot.
++  // Inventory-driven recipes come from the recommendations; pantry mains,
++  // breakfast ideas and kids sides do not depend on inventory.
++  function recipesForSlot(slot, recommendations, pantryRecipes) {
++    if (slot === SLOT.BREAKFAST) return recipesByMealType([MEAL_TYPE.BREAKFAST]);
++    if (slot === SLOT.SIDES) return recipesByMealType(SIDES_SLOT_MEAL_TYPES);
++    const allowed = (recipe) => {
++      if (slot === SLOT.KIDS_TIFFIN) return recipe.suitableForKidsTiffin;
++      if (slot === SLOT.ADULT_TIFFIN) return recipe.suitableForAdultTiffin;
++      if (slot === SLOT.DINNER) return recipe.suitableForAdultDinner;
++      return true; // lunch and guest special have no suitability flag
++    };
++    const byId = new Map();
++    [...recommendations, ...pantryRecipes].filter(allowed).forEach((recipe) => {
++      if (!byId.has(recipe.id)) byId.set(recipe.id, { id: recipe.id, name: recipe.name, mealType: recipe.mealType });
++    });
++    return [...byId.values()].sort((first, second) => first.name.localeCompare(second.name));
++  }
++
+   function getDashboard(weekStart, today) {
++    const recommendations = getRecommendations();
++    const pantryRecipes = getPantryRecipes();
+     const weekEnd = dateOffset(weekStart, WEEK_DAYS - 1);
+     return {
+       weekStart,
+@@ -196,7 +265,11 @@ function createFoodRouter(database) {
+         WHERE approved = 1
+         ORDER BY name
+       `).all(),
+-      recommendations: getRecommendations(),
++      recommendations,
++      slotRecipes: Object.fromEntries(MEAL_SLOT_NAMES.map((slot) => [
++        slot,
++        recipesForSlot(slot, recommendations, pantryRecipes),
++      ])),
+       dalSuggestions: getDalSuggestions(database, weekStart),
+       plan: database.prepare(`
+         SELECT p.id, p.recipe_id, r.name AS recipe_name, r.description, r.meal_type,
+@@ -214,19 +287,16 @@ function createFoodRouter(database) {
+ 
+   function eligibleRecipe(recipeId, mealSlot) {
+     const recipe = database.prepare(`
+-      SELECT id, meal_type, suitable_for_kids_tiffin, suitable_for_adult_tiffin,
+-             suitable_for_adult_dinner
++      SELECT id, meal_type, suitable_for_adult_dinner
+       FROM recipe
+       WHERE id = ? AND approved = 1
+     `).get(recipeId);
+     if (!recipe) return false;
+-    if (recipe.meal_type === 'dal_side') {
+-      return mealSlot === 'dinner' && Boolean(recipe.suitable_for_adult_dinner);
++    if (recipe.meal_type === MEAL_TYPE.DAL_SIDE) {
++      return mealSlot === SLOT.DINNER && Boolean(recipe.suitable_for_adult_dinner);
+     }
+-    if (mealSlot === 'kids_tiffin' && !recipe.suitable_for_kids_tiffin) return false;
+-    if (mealSlot === 'adult_tiffin' && !recipe.suitable_for_adult_tiffin) return false;
+-    if (mealSlot === 'dinner' && !recipe.suitable_for_adult_dinner) return false;
+-    return getRecommendations().some((recommendation) => recommendation.id === recipeId);
++    return recipesForSlot(mealSlot, getRecommendations(), getPantryRecipes())
++      .some((candidate) => candidate.id === recipeId);
+   }
+ 
+   router.get('/', (req, res) => {
+@@ -263,6 +333,22 @@ function createFoodRouter(database) {
+     return res.status(201).json({ staged: itemIds.length });
+   });
+ 
++  // Removes one item from the pending grocery list (bought elsewhere, added by
++  // mistake, no longer needed). Confirmed purchases cannot be deleted here.
++  router.delete('/groceries/stage/:id', (req, res) => {
++    const stageId = Number(req.params.id);
++    if (!Number.isSafeInteger(stageId) || stageId < 1) {
++      return res.status(400).json({ error: 'A valid grocery list item is required.' });
++    }
++    const result = database.prepare(
++      'DELETE FROM grocery_stage WHERE id = ? AND is_purchased = 0',
++    ).run(stageId);
++    if (result.changes !== 1) {
++      return res.status(404).json({ error: 'That item is no longer on the pending grocery list.' });
++    }
++    return res.json({ deleted: 1 });
++  });
++
+   router.post('/groceries/confirm', (req, res) => {
+     const { stageIds, purchaseDate, store } = req.body;
+     const confirmedDate = purchaseDate || new Date().toISOString().slice(0, 10);
+@@ -343,6 +429,8 @@ function createFoodRouter(database) {
+       if (!plan || plan.status !== 'planned') {
+         return null;
+       }
++      // Breakfast, sides and guest specials are never confirmed.
++      if (UNCONFIRMED_SLOTS.includes(plan.meal_slot)) return null;
+       if (AUTO_COOK_MEAL_SLOTS.includes(plan.meal_slot) && response !== RESPONSE.NO) {
+         return null;
+       }
+@@ -376,6 +464,9 @@ function createFoodRouter(database) {
+     return res.json(applyCatchUpResponses(database, responses));
+   });
+ 
++  // Weekday breakfast ideas (config/breakfast-ideas.json), one line each.
++  router.get('/breakfast-ideas', (_req, res) => res.json(loadBreakfastIdeas()));
++
+   // Rows of the inventory table with a freshness label for available lots.
+   router.get('/inventory', (req, res) => {
+     const status = req.query.status === undefined ? 'AVAILABLE' : String(req.query.status).toUpperCase();
+diff --git a/backend/services/jsonRecipes.js b/backend/services/jsonRecipes.js
+new file mode 100644
+index 0000000..c3bf1a7
+--- /dev/null
++++ b/backend/services/jsonRecipes.js
+@@ -0,0 +1,65 @@
++// Reads the two hand-editable JSON lists (breakfast ideas, kids protein) and
++// copies them into the recipe table so plan rows can point at them.
++//
++// Seeding only ADDS rows (INSERT OR IGNORE by name): editing a recipe in the
++// database, e.g. un-approving it, is never overwritten by a restart.
++const fs = require('node:fs');
++const path = require('node:path');
++const { MEAL_TYPE } = require('./slots');
++
++const CONFIG_DIR = path.join(__dirname, '..', 'config');
++const BREAKFAST_PATH = path.join(CONFIG_DIR, 'breakfast-ideas.json');
++const KIDS_PROTEIN_PATH = path.join(CONFIG_DIR, 'kids-protein.json');
++const SIDE_COOLDOWN_DAYS = 0; // repeat spacing for sides is handled by the planner
++
++const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
++
++function loadBreakfastIdeas() {
++  const { ideas = [], weekdays = [] } = readJson(BREAKFAST_PATH);
++  return { ideas, weekdays };
++}
++
++function loadKidsProtein() {
++  return readJson(KIDS_PROTEIN_PATH);
++}
++
++function seedJsonRecipes(database) {
++  const insert = database.prepare(`
++    INSERT OR IGNORE INTO recipe
++      (name, description, cuisine, meal_type, is_veg, requires_soak_marination,
++       soak_time_hours, approved, cooldown_days)
++    VALUES (?, ?, 'Indian', ?, ?, ?, ?, 1, ?)
++  `);
++
++  database.transaction(() => {
++    loadBreakfastIdeas().ideas.forEach((idea) => {
++      insert.run(
++        idea.name,
++        'Weekday breakfast idea, no added sugar.',
++        MEAL_TYPE.BREAKFAST,
++        idea.veg === false ? 0 : 1,
++        idea.overnightPrep ? 1 : 0,
++        idea.overnightPrep ? Number(idea.soakHours) || 0 : 0,
++        SIDE_COOLDOWN_DAYS,
++      );
++    });
++
++    const { pools } = loadKidsProtein();
++    Object.entries(pools).forEach(([poolName, entries]) => {
++      const mealType = poolName === 'weekend_sides' ? MEAL_TYPE.WEEKEND_SIDE : MEAL_TYPE.PROTEIN_SIDE;
++      entries.forEach((entry) => {
++        insert.run(
++          entry.name,
++          poolName === 'weekend_sides' ? 'Weekend side for kids.' : 'Protein portion for kids.',
++          mealType,
++          entry.veg === false ? 0 : 1,
++          0,
++          0,
++          SIDE_COOLDOWN_DAYS,
++        );
++      });
++    });
++  })();
++}
++
++module.exports = { loadBreakfastIdeas, loadKidsProtein, seedJsonRecipes };
+diff --git a/backend/services/kidsSides.js b/backend/services/kidsSides.js
+new file mode 100644
+index 0000000..a39209e
+--- /dev/null
++++ b/backend/services/kidsSides.js
+@@ -0,0 +1,87 @@
++// Kids protein portion (GitHub issue #4). One `sides` plan row per day, plus a
++// weekend side on Saturday and Sunday. The pools live in
++// config/kids-protein.json; nothing here is tied to a database table of its own.
++//
++// Pool for a day:
++//   1. veg-only weekday (Tue/Thu), festival, strict-veg or fasting day
++//        -> veg_restricted_days (paneer, chole, soya ...)
++//   2. summer months            -> summer (curd, yogurt, lassi, chhach ...)
++//   3. everything else          -> default (egg)
++const { loadKidsProtein } = require('./jsonRecipes');
++const { SLOT, MEAL_TYPE } = require('./slots');
++const { dateOffset, daysBetween, weekdayName, isWeekend } = require('./dates');
++
++const DAY_MILLISECONDS = 86400000;
++const STRICT_VEG_RESTRICTIONS = ['strict_veg', 'fasting'];
++
++function poolNameFor(date, calendar, config) {
++  const vegOnlyWeekdays = config.vegOnlyWeekdays.map((day) => day.toLowerCase());
++  const restricted = vegOnlyWeekdays.includes(weekdayName(date))
++    || calendar.hasFestival
++    || STRICT_VEG_RESTRICTIONS.some((restriction) => calendar.restrictions.has(restriction));
++  if (restricted) return 'veg_restricted_days';
++  const month = Number(date.slice(5, 7));
++  return config.summerMonths.includes(month) ? 'summer' : 'default';
++}
++
++// Rotates through the pool by calendar day, skipping anything used within
++// `repeatDays` of this date. If everything was used recently, the one used
++// longest ago wins.
++function pickSide(database, date, poolEntries, mealType, repeatDays) {
++  const names = poolEntries.map((entry) => entry.name);
++  if (names.length === 0) return null;
++  const rows = database.prepare(`
++    SELECT id, name FROM recipe
++    WHERE approved = 1 AND meal_type = ? AND name IN (${names.map(() => '?').join(', ')})
++  `).all(mealType, ...names);
++  if (rows.length === 0) return null;
++  const ordered = names.map((name) => rows.find((row) => row.name === name)).filter(Boolean);
++
++  const recent = new Map(); // recipeId -> closest planned distance in days
++  database.prepare(`
++    SELECT recipe_id AS recipeId, meal_date AS mealDate
++    FROM weekly_meal_plan
++    WHERE meal_slot = ? AND status != 'replaced' AND meal_date BETWEEN ? AND ?
++  `).all(SLOT.SIDES, dateOffset(date, -repeatDays), dateOffset(date, repeatDays)).forEach((row) => {
++    const distance = Math.abs(daysBetween(row.mealDate, date));
++    recent.set(row.recipeId, Math.min(distance, recent.get(row.recipeId) ?? Infinity));
++  });
++
++  const dayNumber = Math.floor(Date.parse(`${date}T00:00:00Z`) / DAY_MILLISECONDS);
++  const start = dayNumber % ordered.length;
++  const rotated = [...ordered.slice(start), ...ordered.slice(0, start)];
++  const unused = rotated.find((row) => (recent.get(row.id) ?? Infinity) > repeatDays);
++  if (unused) return unused;
++  return rotated.reduce((best, row) => ((recent.get(row.id) ?? Infinity) > (recent.get(best.id) ?? Infinity) ? row : best));
++}
++
++const hasSideOfType = (database, date, mealType) => Boolean(database.prepare(`
++  SELECT 1
++  FROM weekly_meal_plan p JOIN recipe r ON r.id = p.recipe_id
++  WHERE p.meal_date = ? AND p.meal_slot = ? AND r.meal_type = ? AND p.status != 'replaced'
++  LIMIT 1
++`).get(date, SLOT.SIDES, mealType));
++
++// Adds the missing side rows for one date. Existing rows (manual or generated)
++// are left alone. Returns [{ date, slot, recipe }] for what was created.
++function planSidesForDate(database, date, calendar) {
++  const config = loadKidsProtein();
++  const insert = database.prepare(`
++    INSERT INTO weekly_meal_plan (recipe_id, meal_date, meal_slot, status)
++    VALUES (?, ?, ?, 'planned')
++  `);
++  const created = [];
++  const wanted = [{ mealType: MEAL_TYPE.PROTEIN_SIDE, pool: poolNameFor(date, calendar, config) }];
++  if (isWeekend(date)) wanted.push({ mealType: MEAL_TYPE.WEEKEND_SIDE, pool: 'weekend_sides' });
++
++  wanted.forEach(({ mealType, pool }) => {
++    if (hasSideOfType(database, date, mealType)) return;
++    const pick = pickSide(database, date, config.pools[pool] || [], mealType, config.repeatAvoidanceDays);
++    if (!pick) return;
++    insert.run(pick.id, date, SLOT.SIDES);
++    created.push({ date, slot: SLOT.SIDES, recipe: pick.name });
++  });
++  return created;
++}
++
++module.exports = { planSidesForDate, poolNameFor };
+diff --git a/backend/services/mealPlanner.js b/backend/services/mealPlanner.js
+index a863f9c..afa5b5d 100644
+--- a/backend/services/mealPlanner.js
++++ b/backend/services/mealPlanner.js
+@@ -8,6 +8,8 @@
+ // The UI cards read weekly_meal_plan, never this module, so a published plan
+ // stays stable until something explicitly changes it.
+ const { rules } = require('./rules');
++const { SLOT, NON_MAIN_MEAL_TYPES, sqlList } = require('./slots');
++const { planSidesForDate } = require('./kidsSides');
+ const {
+   WEEK_DAYS,
+   dateOffset,
+@@ -18,12 +20,6 @@ const {
+   localDateString,
+ } = require('./dates');
+ 
+-const SLOT = Object.freeze({
+-  KIDS_TIFFIN: 'kids_tiffin',
+-  ADULT_TIFFIN: 'adult_tiffin',
+-  WEEKEND_LUNCH: 'weekend_lunch',
+-  DINNER: 'dinner',
+-});
+ const TIFFIN_TYPE = Object.freeze({
+   KIDS: 'kids_tiffin',
+   ADULT: 'adult_tiffin',
+@@ -36,7 +32,6 @@ const DIETARY = Object.freeze({
+   NONE: 'none',
+ });
+ const KIDS_TIFFIN_PARTS = ['AM', 'PM'];
+-const DAL_SIDE_MEAL_TYPE = 'dal_side'; // planned separately from the vegetable dish
+ const INDIAN_CUISINE = 'Indian';       // adult tiffin must NOT be Indian (spec 4a)
+ const NO_EXPIRY_DAYS = 9999;           // sorts lots without an expiry date last
+ // Slots where festival menus and the weekend non-veg/frozen preference apply.
+@@ -65,9 +60,9 @@ function loadPlanningContext(database) {
+     SELECT id, name, cuisine, meal_type, is_veg, is_frozen_friendly, cooldown_days,
+            suitable_for_kids_tiffin, suitable_for_adult_tiffin, suitable_for_adult_dinner
+     FROM recipe
+-    WHERE approved = 1 AND COALESCE(meal_type, '') != ?
++    WHERE approved = 1 AND COALESCE(meal_type, '') NOT IN (${sqlList(NON_MAIN_MEAL_TYPES)})
+     ORDER BY name
+-  `).all(DAL_SIDE_MEAL_TYPE);
++  `).all(...NON_MAIN_MEAL_TYPES); // dal sides, breakfast and kids sides are planned separately
+ 
+   const itemsByRecipe = groupBy(database.prepare(`
+     SELECT ri.recipe_id AS recipeId, ri.role, i.id AS itemId, i.name,
+@@ -356,6 +351,12 @@ function generateWeek(database, weekStart, { today = localDateString(new Date())
+       const date = dateOffset(weekStart, offset);
+       if (date < today) continue;
+ 
++      // Kids protein side (issue #4): no inventory, no confirmation.
++      planSidesForDate(database, date, getCalendarInfo(database, date)).forEach((side) => {
++        summary.created += 1;
++        summary.plan.push({ ...side, kidPart: null });
++      });
++
+       slotsForDate(database, date).forEach(({ slot, kidParts }) => {
+         if (hasPlanRow.get(date, slot)) {
+           summary.alreadyPlanned += 1;
+diff --git a/backend/services/mealResponses.js b/backend/services/mealResponses.js
+index e98784e..3f1755f 100644
+--- a/backend/services/mealResponses.js
++++ b/backend/services/mealResponses.js
+@@ -3,6 +3,7 @@
+ // finalizer and the catch-up screen all go through applyMealResponse so the
+ // three paths can never drift apart.
+ const { dateOffset } = require('./dates');
++const { UNCONFIRMED_SLOTS, sqlList } = require('./slots');
+ 
+ const RESPONSE = Object.freeze({ YES: 'yes', NO: 'no', OTHER: 'other' });
+ const STATUS_BY_RESPONSE = Object.freeze({
+@@ -88,8 +89,9 @@ function getUnconfirmedMeals(database, today, lookbackDays) {
+     WHERE p.status = 'planned'
+       AND p.meal_date < ?
+       AND p.meal_date >= ?
++      AND p.meal_slot NOT IN (${sqlList(UNCONFIRMED_SLOTS)})
+     ORDER BY p.meal_date, p.meal_slot, p.id
+-  `).all(today, dateOffset(today, -lookbackDays));
++  `).all(today, dateOffset(today, -lookbackDays), ...UNCONFIRMED_SLOTS);
+ }
+ 
+ function recordAwayDay(database, date) {
+diff --git a/backend/services/scheduler.js b/backend/services/scheduler.js
+index 86bda77..c375b10 100644
+--- a/backend/services/scheduler.js
++++ b/backend/services/scheduler.js
+@@ -7,6 +7,7 @@
+ // (Section 6.4: a pure timer that "just hopes" is not reliable enough.)
+ const { rules } = require('./rules');
+ const { generateWeek } = require('./mealPlanner');
++const { UNCONFIRMED_SLOTS, sqlList } = require('./slots');
+ const {
+   WEEK_DAYS,
+   dateOffset,
+@@ -28,6 +29,9 @@ const SLOT_LABELS = Object.freeze({
+   adult_tiffin: 'adult tiffin',
+   weekend_lunch: 'lunch',
+   dinner: 'dinner',
++  breakfast: 'breakfast',
++  sides: 'sides',
++  guest_special: 'guest special',
+ });
+ const MAX_NAMES_IN_MESSAGE = 2;
+ 
+@@ -96,8 +100,9 @@ function createScheduler({ database, sendPushToAll, pushConfigured, logger = con
+       FROM weekly_meal_plan p
+       JOIN recipe r ON r.id = p.recipe_id
+       WHERE p.meal_date = ? AND p.status = 'planned' AND p.notified_at IS NULL
++        AND p.meal_slot NOT IN (${sqlList(UNCONFIRMED_SLOTS)})
+       ORDER BY p.meal_slot, p.id
+-    `).all(today);
++    `).all(today, ...UNCONFIRMED_SLOTS);
+     if (rows.length === 0) return;
+ 
+     const names = rows.map((row) => row.recipeName);
+@@ -130,8 +135,9 @@ function createScheduler({ database, sendPushToAll, pushConfigured, logger = con
+         AND p.notified_at <= ?
+         AND p.retry_sent_at IS NULL
+         AND p.meal_date >= ?
++        AND p.meal_slot NOT IN (${sqlList(UNCONFIRMED_SLOTS)})
+       ORDER BY p.meal_date, p.meal_slot, p.id
+-    `).all(cutoff, dateOffset(today, -rules.catchup_lookback_days));
++    `).all(cutoff, dateOffset(today, -rules.catchup_lookback_days), ...UNCONFIRMED_SLOTS);
+     if (rows.length === 0) return;
+ 
+     // Stamp first so a slow push service can never cause a second retry.
+diff --git a/backend/services/slots.js b/backend/services/slots.js
+new file mode 100644
+index 0000000..56e84cc
+--- /dev/null
++++ b/backend/services/slots.js
+@@ -0,0 +1,44 @@
++// Shared meal-slot and meal-type names, so the planner, API, scheduler and
++// catch-up code all agree on them.
++//
++// meal_slot (weekly_meal_plan.meal_slot) is validated here and in the API, not
++// by a database CHECK (see migrations/001_weekly_meal_plan_drop_slot_check.sql).
++const SLOT = Object.freeze({
++  KIDS_TIFFIN: 'kids_tiffin',
++  ADULT_TIFFIN: 'adult_tiffin',
++  WEEKEND_LUNCH: 'weekend_lunch',
++  DINNER: 'dinner',
++  BREAKFAST: 'breakfast',
++  SIDES: 'sides',
++  GUEST_SPECIAL: 'guest_special',
++});
++
++const MEAL_SLOTS = Object.freeze(Object.values(SLOT));
++
++// Slots that are never confirmed, never nag through push / catch-up, and never
++// consume inventory. They are plain "what is planned" rows.
++const UNCONFIRMED_SLOTS = Object.freeze([SLOT.BREAKFAST, SLOT.SIDES, SLOT.GUEST_SPECIAL]);
++
++const MEAL_TYPE = Object.freeze({
++  DAL_SIDE: 'dal_side',
++  BREAKFAST: 'breakfast',
++  PROTEIN_SIDE: 'protein_side',
++  WEEKEND_SIDE: 'weekend_side',
++});
++
++// recipe.meal_type values that are never a main dish, so they are kept out of
++// the automatic planner and out of the main-dish slots.
++const NON_MAIN_MEAL_TYPES = Object.freeze(Object.values(MEAL_TYPE));
++const SIDES_SLOT_MEAL_TYPES = Object.freeze([MEAL_TYPE.PROTEIN_SIDE, MEAL_TYPE.WEEKEND_SIDE]);
++
++const sqlList = (values) => values.map(() => '?').join(', ');
++
++module.exports = {
++  SLOT,
++  MEAL_SLOTS,
++  UNCONFIRMED_SLOTS,
++  MEAL_TYPE,
++  NON_MAIN_MEAL_TYPES,
++  SIDES_SLOT_MEAL_TYPES,
++  sqlList,
++};
+diff --git a/backend/test/meal-slots-and-lists.test.js b/backend/test/meal-slots-and-lists.test.js
+new file mode 100644
+index 0000000..3ac4e6a
+--- /dev/null
++++ b/backend/test/meal-slots-and-lists.test.js
+@@ -0,0 +1,381 @@
++// Run with: npm --prefix backend test
++// Covers: deleting pending grocery items, the breakfast / sides / guest_special
++// slots, the kids protein rules (issue #4), the JSON lists, and the expanded
++// Indian recipe seed. Uses an in-memory database and the real schema + seed.
++const test = require('node:test');
++const assert = require('node:assert/strict');
++const express = require('express');
++const Database = require('better-sqlite3');
++const { initializeFoodData } = require('../db/foodData');
++const foodRoutes = require('../routes/food');
++const { generateWeek, loadPlanningContext, decideMeal } = require('../services/mealPlanner');
++const { createScheduler } = require('../services/scheduler');
++const { seedJsonRecipes, loadBreakfastIdeas, loadKidsProtein } = require('../services/jsonRecipes');
++
++const SILENT_LOGGER = { log() {}, error() {} };
++
++function createDatabase() {
++  const database = new Database(':memory:');
++  database.pragma('foreign_keys = ON');
++  database.exec(`
++    CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT);
++    CREATE TABLE push_subscriptions (
++      id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, endpoint TEXT UNIQUE,
++      p256dh TEXT, auth TEXT, user_agent TEXT
++    );
++  `);
++  initializeFoodData(database);
++  database.prepare("UPDATE weekly_meal_plan SET status = 'confirmed_skipped'").run();
++  return database;
++}
++
++const recipeId = (database, name) => database.prepare('SELECT id FROM recipe WHERE name = ?').get(name).id;
++const sidesOn = (database, date) => database.prepare(`
++  SELECT r.name, r.meal_type AS mealType
++  FROM weekly_meal_plan p JOIN recipe r ON r.id = p.recipe_id
++  WHERE p.meal_slot = 'sides' AND p.meal_date = ?
++  ORDER BY p.id
++`).all(date);
++const poolNames = (pool) => new Set(loadKidsProtein().pools[pool].map((entry) => entry.name));
++
++async function withApi(database, run) {
++  const app = express();
++  app.use(express.json());
++  app.use('/api/food', foodRoutes(database));
++  const server = await new Promise((resolve) => { const listening = app.listen(0, () => resolve(listening)); });
++  const base = `http://127.0.0.1:${server.address().port}/api/food`;
++  const call = async (path, { method, body } = {}) => {
++    const response = await fetch(`${base}${path}`, {
++      method: method || (body === undefined ? 'GET' : 'POST'),
++      headers: { 'Content-Type': 'application/json' },
++      body: body === undefined ? undefined : JSON.stringify(body),
++    });
++    return { status: response.status, body: await response.json() };
++  };
++  try { await run(call); } finally { server.close(); }
++}
++
++// ---------------------------------------------------------------------------
++// Issue #1: delete a pending grocery item
++// ---------------------------------------------------------------------------
++
++test('grocery list: a pending item can be deleted, a purchased one cannot', async () => {
++  const database = createDatabase();
++  const itemId = (name) => database.prepare('SELECT id FROM item WHERE name = ?').get(name).id;
++
++  await withApi(database, async (call) => {
++    await call('/groceries/stage', { body: { itemIds: [itemId('Carrot'), itemId('Peas'), itemId('Cabbage')] } });
++    const pending = () => database.prepare('SELECT id, item_id FROM grocery_stage WHERE is_purchased = 0 ORDER BY id').all();
++    const [carrot, peas, cabbage] = pending();
++
++    // Confirm two, delete the third: nothing is left pending.
++    const confirmed = await call('/groceries/confirm', { body: { stageIds: [carrot.id, peas.id], purchaseDate: '2026-09-28' } });
++    assert.equal(confirmed.status, 201);
++    assert.equal(pending().length, 1);
++
++    assert.equal((await call(`/groceries/stage/${carrot.id}`, { method: 'DELETE' })).status, 404); // already purchased
++    const deleted = await call(`/groceries/stage/${cabbage.id}`, { method: 'DELETE' });
++    assert.equal(deleted.status, 200);
++    assert.equal(pending().length, 0);
++    assert.equal((await call(`/groceries/stage/${cabbage.id}`, { method: 'DELETE' })).status, 404); // gone
++    assert.equal((await call('/groceries/stage/abc', { method: 'DELETE' })).status, 400);
++    assert.equal((await call('/groceries/stage/0', { method: 'DELETE' })).status, 400);
++
++    // The purchased rows and their inventory lots are untouched.
++    assert.equal(database.prepare('SELECT COUNT(*) AS n FROM grocery_stage WHERE is_purchased = 1').get().n, 2);
++    const dashboard = await call('/?weekStart=2026-10-05&today=2026-10-05');
++    assert.equal(dashboard.body.groceryStage.length, 0);
++  });
++});
++
++// ---------------------------------------------------------------------------
++// New slots: breakfast, sides, guest_special
++// ---------------------------------------------------------------------------
++
++test('slots: breakfast, sides and guest_special accept only their own recipes', async () => {
++  const database = createDatabase();
++  const plan = (call, name, date, slot) => call('/plan', { body: { recipeId: recipeId(database, name), mealDate: date, mealSlot: slot } });
++
++  await withApi(database, async (call) => {
++    assert.equal((await plan(call, 'Overnight oats with chia seeds, banana and cinnamon', '2026-10-06', 'breakfast')).status, 201);
++    assert.equal((await plan(call, 'Boiled egg', '2026-10-06', 'sides')).status, 201);
++    assert.equal((await plan(call, 'Butter Chicken', '2026-10-10', 'guest_special')).status, 201);
++    // Pantry mains (no fresh vegetable) can also be planned by hand for dinner.
++    assert.equal((await plan(call, 'Dal Tadka', '2026-10-07', 'dinner')).status, 201);
++
++    // Wrong recipe kind for the slot.
++    assert.equal((await plan(call, 'Butter Chicken', '2026-10-06', 'breakfast')).status, 409);
++    assert.equal((await plan(call, 'Boiled egg', '2026-10-06', 'dinner')).status, 409);
++    assert.equal((await plan(call, 'Overnight oats with chia seeds, banana and cinnamon', '2026-10-06', 'sides')).status, 409);
++    assert.equal((await plan(call, 'Overnight oats with chia seeds, banana and cinnamon', '2026-10-06', 'guest_special')).status, 409);
++    // Unknown slot.
++    assert.equal((await plan(call, 'Dal Tadka', '2026-10-07', 'brunch')).status, 400);
++
++    const { body } = await call('/?weekStart=2026-10-05&today=2026-10-05');
++    const names = (slot) => body.slotRecipes[slot].map((recipe) => recipe.name);
++    assert.equal(names('breakfast').length, loadBreakfastIdeas().ideas.length);
++    assert.ok(names('breakfast').every((name) => loadBreakfastIdeas().ideas.some((idea) => idea.name === name)));
++    assert.ok(names('sides').includes('Boiled egg') && names('sides').includes('Potato chili'));
++    assert.ok(names('guest_special').includes('Butter Chicken') && names('guest_special').includes('Bhindi Masala'));
++    assert.ok(!names('guest_special').includes('Boiled egg'));
++    // Main-dish slots never offer breakfast or kids sides.
++    ['dinner', 'weekend_lunch', 'kids_tiffin'].forEach((slot) => {
++      assert.ok(!names(slot).includes('Boiled egg'));
++      assert.ok(!names(slot).some((name) => name.startsWith('Overnight oats')));
++    });
++    assert.ok(names('dinner').includes('Dal Tadka'));
++    assert.ok(!names('kids_tiffin').includes('Butter Chicken')); // not marked kid-friendly
++    assert.ok(body.plan.some((row) => row.meal_slot === 'breakfast'));
++  });
++});
++
++test('slots: breakfast, sides and guest rows are never confirmed, pushed or caught up', async () => {
++  const database = createDatabase();
++  const insert = database.prepare(`
++    INSERT INTO weekly_meal_plan (recipe_id, meal_date, meal_slot, status) VALUES (?, ?, ?, 'planned')
++  `);
++  const oats = recipeId(database, 'Overnight oats with chia seeds, banana and cinnamon');
++  const breakfast = insert.run(oats, '2026-10-05', 'breakfast').lastInsertRowid;
++  insert.run(recipeId(database, 'Boiled egg'), '2026-10-05', 'sides');
++  insert.run(recipeId(database, 'Butter Chicken'), '2026-10-05', 'guest_special');
++  insert.run(oats, '2026-10-06', 'breakfast'); // tomorrow: soak reminder
++
++  const sent = [];
++  const scheduler = createScheduler({
++    database,
++    sendPushToAll: async (payload) => { sent.push(payload); return { attempted: 1, sent: 1, failed: 0 }; },
++    pushConfigured: true,
++    logger: SILENT_LOGGER,
++  });
++  await scheduler.tick(new Date(2026, 9, 5, 19, 30));
++  // Weekly generation may have added real dinner rows, which do get the push;
++  // the breakfast, sides and guest rows must not be mentioned or marked notified.
++  sent.filter((payload) => payload.title === 'Did you cook today?').forEach((payload) => {
++    assert.doesNotMatch(payload.body, /Overnight oats|Boiled egg|Butter Chicken/);
++  });
++  assert.equal(database.prepare(`
++    SELECT COUNT(*) AS n FROM weekly_meal_plan
++    WHERE meal_slot IN ('breakfast', 'sides', 'guest_special') AND meal_date = '2026-10-05' AND notified_at IS NOT NULL
++  `).get().n, 0);
++  await scheduler.tick(new Date(2026, 9, 5, 20, 0));
++  const soak = sent.find((payload) => payload.title === 'Soak tonight');
++  assert.ok(soak, 'overnight breakfast should trigger the soak reminder');
++  assert.match(soak.body, /breakfast/);
++
++  await withApi(database, async (call) => {
++    assert.equal((await call(`/plan/${breakfast}/confirm`, { body: { response: 'yes' } })).status, 409);
++    assert.equal((await call(`/plan/${breakfast}/confirm`, { body: { response: 'no' } })).status, 409);
++    // 2026-10-05 is in the past for this dashboard call: still not "unconfirmed".
++    const dashboard = await call('/?weekStart=2026-10-05&today=2026-10-07');
++    assert.equal(dashboard.body.unconfirmed.length, 0);
++  });
++  assert.equal(database.prepare("SELECT COUNT(*) AS n FROM meal_confirmation_log WHERE recipe_id = ?").get(oats).n, 0);
++});
++
++// ---------------------------------------------------------------------------
++// Issue #4: kids protein rules
++// ---------------------------------------------------------------------------
++
++test('kids protein: veg-only weekdays use paneer/soya, summer uses curd, otherwise egg', () => {
++  const database = createDatabase();
++  const restricted = poolNames('veg_restricted_days');
++  const summer = poolNames('summer');
++  const eggs = poolNames('default');
++  const weekend = poolNames('weekend_sides');
++
++  // Summer week (August): Mon 2026-08-03 .. Sun 2026-08-09.
++  generateWeek(database, '2026-08-03', { today: '2026-08-03' });
++  const one = (date) => sidesOn(database, date).filter((row) => row.mealType === 'protein_side').map((row) => row.name);
++  ['2026-08-03', '2026-08-05', '2026-08-07', '2026-08-08', '2026-08-09'].forEach((date) => {
++    assert.ok(summer.has(one(date)[0]), `${date} should be a curd-family side, got ${one(date)}`);
++  });
++  ['2026-08-04', '2026-08-06'].forEach((date) => { // Tuesday, Thursday
++    assert.ok(restricted.has(one(date)[0]), `${date} should be paneer/chole/soya, got ${one(date)}`);
++  });
++  // Saturday and Sunday also get one weekend side.
++  ['2026-08-08', '2026-08-09'].forEach((date) => {
++    const extra = sidesOn(database, date).filter((row) => row.mealType === 'weekend_side');
++    assert.equal(extra.length, 1);
++    assert.ok(weekend.has(extra[0].name));
++  });
++  assert.equal(sidesOn(database, '2026-08-03').length, 1);
++
++  // Winter week (October): egg on ordinary days, paneer/soya on Tue/Thu.
++  generateWeek(database, '2026-10-05', { today: '2026-10-05' });
++  ['2026-10-05', '2026-10-07', '2026-10-09', '2026-10-10', '2026-10-11'].forEach((date) => {
++    assert.ok(eggs.has(one(date)[0]), `${date} should be egg, got ${one(date)}`);
++  });
++  ['2026-10-06', '2026-10-08'].forEach((date) => assert.ok(restricted.has(one(date)[0])));
++
++  // September is still summer (June to September); October is not.
++  generateWeek(database, '2026-09-28', { today: '2026-09-28' });
++  assert.ok(summer.has(one('2026-09-28')[0]));
++  assert.ok(restricted.has(one('2026-10-01')[0]));
++});
++
++test('kids protein: festivals and strict-veg days switch to the vegetarian pool, and reruns add nothing', () => {
++  const database = createDatabase();
++  // 2026-10-20 (Tuesday, seeded Diwali sample) would be restricted anyway; use a Wednesday.
++  const diwali = database.prepare("SELECT id FROM festival WHERE name = 'Diwali'").get().id;
++  database.prepare("INSERT INTO calendar_date (calendar_date, festival_id, dietary_restriction) VALUES ('2026-10-21', ?, 'none')").run(diwali);
++  database.prepare("INSERT INTO calendar_date (calendar_date, dietary_restriction) VALUES ('2026-10-23', 'strict_veg')").run();
++
++  const first = generateWeek(database, '2026-10-19', { today: '2026-10-19' });
++  const pick = (date) => sidesOn(database, date).find((row) => row.mealType === 'protein_side').name;
++  assert.ok(poolNames('veg_restricted_days').has(pick('2026-10-21'))); // Wednesday festival
++  assert.ok(poolNames('veg_restricted_days').has(pick('2026-10-23'))); // Friday strict veg
++  assert.ok(poolNames('veg_restricted_days').has(pick('2026-10-22'))); // Thursday: veg-only weekday
++  assert.ok(poolNames('default').has(pick('2026-10-19')));             // Monday: plain egg day
++
++  const sideCount = database.prepare("SELECT COUNT(*) AS n FROM weekly_meal_plan WHERE meal_slot = 'sides'").get().n;
++  const second = generateWeek(database, '2026-10-19', { today: '2026-10-19' });
++  assert.equal(second.created, 0);
++  assert.equal(database.prepare("SELECT COUNT(*) AS n FROM weekly_meal_plan WHERE meal_slot = 'sides'").get().n, sideCount);
++  assert.ok(first.created > 0);
++
++  // A manual side is never replaced or duplicated.
++  const manualDb = createDatabase();
++  manualDb.prepare("INSERT INTO weekly_meal_plan (recipe_id, meal_date, meal_slot, status) VALUES (?, '2026-10-05', 'sides', 'planned')")
++    .run(recipeId(manualDb, 'Scrambled eggs'));
++  generateWeek(manualDb, '2026-10-05', { today: '2026-10-05' });
++  assert.deepEqual(sidesOn(manualDb, '2026-10-05').filter((row) => row.mealType === 'protein_side').map((row) => row.name), ['Scrambled eggs']);
++});
++
++test('kids protein: the same side is not repeated on back-to-back days', () => {
++  const database = createDatabase();
++  generateWeek(database, '2026-08-03', { today: '2026-08-03' });
++  generateWeek(database, '2026-08-10', { today: '2026-08-10' });
++  const sides = database.prepare(`
++    SELECT p.meal_date AS date, r.name FROM weekly_meal_plan p JOIN recipe r ON r.id = p.recipe_id
++    WHERE p.meal_slot = 'sides' AND r.meal_type = 'protein_side' ORDER BY p.meal_date
++  `).all();
++  assert.equal(sides.length, 14);
++  for (let index = 1; index < sides.length; index += 1) {
++    assert.notEqual(sides[index].name, sides[index - 1].name);
++  }
++});
++
++// ---------------------------------------------------------------------------
++// JSON lists and seeding
++// ---------------------------------------------------------------------------
++
++test('breakfast ideas: one-liners, unique ids, no added sugar, overnight items flagged', () => {
++  const { ideas, weekdays } = loadBreakfastIdeas();
++  assert.deepEqual(weekdays, ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']);
++  assert.ok(ideas.length >= 25);
++  assert.equal(new Set(ideas.map((idea) => idea.id)).size, ideas.length);
++  assert.equal(new Set(ideas.map((idea) => idea.name)).size, ideas.length);
++  const added = /\b(sugar|jaggery|gur|honey|syrup|jam|sweetened|sweetener|maple|molasses)\b/i;
++  ideas.forEach((idea) => {
++    assert.ok(idea.name.length > 0 && !idea.name.includes('\n'));
++    assert.ok(!added.test(idea.name), `no added sugar: ${idea.name}`);
++    assert.equal(typeof idea.veg, 'boolean');
++    if (idea.overnightPrep) assert.ok(idea.soakHours > 0);
++  });
++  assert.ok(ideas.some((idea) => idea.overnightPrep));
++  ['Avocado toast', 'Chana salad', 'Chole salad'].forEach((start) => {
++    assert.ok(ideas.some((idea) => idea.name.startsWith(start)), `${start} (from issue #4) is in the list`);
++  });
++  // Sorted, so the browse page reads alphabetically.
++  const sorted = [...ideas].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
++  assert.deepEqual(ideas.map((idea) => idea.id), sorted.map((idea) => idea.id));
++});
++
++test('kids protein list matches issue #4 and every pool is non-empty and sorted', () => {
++  const { pools, summerMonths, vegOnlyWeekdays } = loadKidsProtein();
++  assert.deepEqual(summerMonths, [6, 7, 8, 9]);
++  assert.deepEqual(vegOnlyWeekdays, ['Tuesday', 'Thursday']);
++  const all = Object.values(pools).flat();
++  assert.equal(new Set(all.map((entry) => entry.id)).size, all.length);
++  assert.equal(new Set(all.map((entry) => entry.name)).size, all.length);
++  Object.entries(pools).forEach(([pool, entries]) => {
++    assert.ok(entries.length >= 6, `${pool} has enough variety`);
++    const names = entries.map((entry) => entry.name.toLowerCase());
++    assert.deepEqual(names, [...names].sort());
++  });
++  const text = (pool) => pools[pool].map((entry) => entry.name).join(' ');
++  assert.match(text('veg_restricted_days'), /paneer/i);
++  assert.match(text('veg_restricted_days'), /chole/i);
++  assert.match(text('veg_restricted_days'), /soya/i);
++  assert.match(text('summer'), /yogurt/i);
++  assert.match(text('summer'), /lassi/i);
++  assert.match(text('summer'), /chhach/i);
++  assert.ok(pools.default.every((entry) => /egg|omelette/i.test(entry.name) && entry.veg === false));
++  assert.match(text('weekend_sides'), /Chana salad/);
++  assert.match(text('weekend_sides'), /Peanut masala/);
++  assert.match(text('weekend_sides'), /Avocado/);
++  assert.match(text('weekend_sides'), /Potato chili/);
++});
++
++test('JSON seeding only adds: it is idempotent and never overwrites edits', () => {
++  const database = createDatabase();
++  const count = () => database.prepare("SELECT COUNT(*) AS n FROM recipe WHERE meal_type IN ('breakfast', 'protein_side', 'weekend_side')").get().n;
++  const before = count();
++  const { pools, ideas } = { pools: loadKidsProtein().pools, ideas: loadBreakfastIdeas().ideas };
++  assert.equal(before, ideas.length + Object.values(pools).flat().length);
++
++  database.prepare("UPDATE recipe SET approved = 0 WHERE name = 'Boiled egg'").run();
++  seedJsonRecipes(database);
++  seedJsonRecipes(database);
++  assert.equal(count(), before);
++  assert.equal(database.prepare("SELECT approved FROM recipe WHERE name = 'Boiled egg'").get().approved, 0);
++
++  const overnight = database.prepare("SELECT requires_soak_marination AS soak, soak_time_hours AS hours FROM recipe WHERE name = ?")
++    .get('Overnight oats with chia seeds, banana and cinnamon');
++  assert.deepEqual(overnight, { soak: 1, hours: 6 });
++  assert.equal(database.prepare("SELECT is_veg FROM recipe WHERE name = 'Boiled egg'").get().is_veg, 0);
++});
++
++// ---------------------------------------------------------------------------
++// Expanded Indian recipe list
++// ---------------------------------------------------------------------------
++
++test('expanded recipe list: veg and non-veg, every recipe has real ingredients', () => {
++  const database = createDatabase();
++  const mains = database.prepare(`
++    SELECT id, name, is_veg AS isVeg, cuisine, suitable_for_adult_tiffin AS adultTiffin
++    FROM recipe WHERE meal_type IN ('sabzi', 'dal', 'curry', 'rice')
++  `).all();
++  assert.ok(mains.length >= 40, `expected 40+ main dishes, got ${mains.length}`);
++  assert.ok(mains.filter((recipe) => recipe.isVeg).length >= 20);
++  assert.ok(mains.filter((recipe) => !recipe.isVeg).length >= 15);
++  assert.ok(mains.every((recipe) => recipe.cuisine === 'Indian'));
++  // Indian dishes are never adult-tiffin candidates (tiffin must be non-Indian).
++  assert.ok(mains.every((recipe) => !recipe.adultTiffin));
++
++  // The seed joins by name: a typo would silently drop ingredients, so check.
++  const withoutRequired = mains.filter((recipe) => !database.prepare(
++    "SELECT 1 FROM recipe_item WHERE recipe_id = ? AND role = 'REQUIRED'",
++  ).get(recipe.id));
++  assert.deepEqual(withoutRequired.map((recipe) => recipe.name), []);
++
++  // Non-veg proteins are always-available pantry items, not inventory lots.
++  const proteins = database.prepare("SELECT name, always_available AS always, inventory_type AS type, is_veg AS isVeg FROM item WHERE name IN ('Chicken','Mutton','Fish','Prawns','Eggs')").all();
++  assert.equal(proteins.length, 5);
++  assert.ok(proteins.every((item) => item.always === 1 && item.type === 'STAPLE' && item.isVeg === 0));
++  // New fresh vegetables show up in the grocery list; proteins do not.
++  const fresh = database.prepare("SELECT name FROM item WHERE inventory_type = 'FRESH'").all().map((item) => item.name);
++  ['Karela', 'Kaddu', 'Mushroom', 'Beetroot', 'Broccoli', 'Tinda'].forEach((name) => assert.ok(fresh.includes(name)));
++  assert.ok(!fresh.includes('Chicken') && !fresh.includes('Paneer'));
++
++  // Marinating and soaking dishes feed the 8 pm reminder.
++  const soaked = database.prepare("SELECT name FROM recipe WHERE requires_soak_marination = 1 AND meal_type IN ('sabzi','dal','curry','rice')").all().map((row) => row.name);
++  ['Chole (Punjabi)', 'Dal Makhani', 'Tandoori Chicken', 'Chicken Biryani'].forEach((name) => assert.ok(soaked.includes(name)));
++});
++
++test('expanded recipe list: fresh-vegetable dishes join the planner, pantry dishes stay manual', () => {
++  const database = createDatabase();
++  const names = (date, slot = 'dinner') => decideMeal(loadPlanningContext(database), { date, slot }).map((entry) => entry.recipe.name);
++  const saturday = names('2026-10-10');
++  // Spinach is in stock: Palak Paneer / Palak Chicken are candidates, and on a
++  // weekend the non-veg dish ranks ahead of the vegetarian ones.
++  assert.ok(saturday.includes('Palak Chicken') && saturday.includes('Palak Paneer'));
++  assert.ok(saturday.indexOf('Palak Chicken') < saturday.indexOf('Palak Paneer'));
++  // No fresh vegetable needed => never auto-planned.
++  assert.ok(!saturday.includes('Butter Chicken') && !saturday.includes('Dal Tadka'));
++  // Breakfast and sides never leak into main-dish planning.
++  assert.ok(!saturday.some((name) => name === 'Boiled egg' || name.startsWith('Overnight oats')));
++  // On a fasting day non-veg is dropped.
++  database.prepare("INSERT INTO calendar_date (calendar_date, dietary_restriction) VALUES ('2026-10-10', 'fasting')").run();
++  assert.ok(!names('2026-10-10').includes('Palak Chicken'));
++});
+diff --git a/backend/test/planner-and-scheduler.test.js b/backend/test/planner-and-scheduler.test.js
+index d501d8c..56a4cac 100644
+--- a/backend/test/planner-and-scheduler.test.js
++++ b/backend/test/planner-and-scheduler.test.js
+@@ -13,7 +13,14 @@ const { createScheduler } = require('../services/scheduler');
+ 
+ const SILENT_LOGGER = { log() {}, error() {} };
+ 
+-function createDatabase() {
++// The scenarios below were written against the original seven main dishes.
++// Pin them so the expanded Indian recipe list (see the "expanded recipe list"
++// tests) cannot change which dish wins. Sides, breakfast and dal sides stay on.
++const ORIGINAL_MAIN_DISHES = [
++  'Bhindi Masala', 'Aloo Gobi', 'Baingan Bharta', 'Lauki Dal', 'Gajar Matar', 'Palak Dal', 'Mixed Vegetable',
++];
++
++function createDatabase({ pinOriginalRecipes = true } = {}) {
+   const database = new Database(':memory:');
+   database.pragma('foreign_keys = ON');
+   database.exec(`
+@@ -27,6 +34,13 @@ function createDatabase() {
+   // The sample data ships a few past plan rows; treat them as already answered
+   // so they do not reserve inventory in these scenarios.
+   database.prepare("UPDATE weekly_meal_plan SET status = 'confirmed_skipped'").run();
++  if (pinOriginalRecipes) {
++    database.prepare(`
++      UPDATE recipe SET approved = 0
++      WHERE meal_type IN ('sabzi', 'dal', 'curry', 'rice')
++        AND name NOT IN (${ORIGINAL_MAIN_DISHES.map(() => '?').join(', ')})
++    `).run(...ORIGINAL_MAIN_DISHES);
++  }
+   return database;
+ }
+ 
+diff --git a/frontend/src/App.jsx b/frontend/src/App.jsx
+index c1c5f34..01dd71c 100755
+--- a/frontend/src/App.jsx
++++ b/frontend/src/App.jsx
+@@ -51,6 +51,7 @@ function AppContent() {
+             <Route path="/" element={<HomePage />} />
+             <Route path="/settings" element={<HomePage />} />
+             <Route path="/inventory" element={<HomePage />} />
++            <Route path="/breakfast" element={<HomePage />} />
+             <Route path="*" element={<Navigate to="/" replace />} />
+           </Route>
+         </Routes>
+diff --git a/frontend/src/components/BreakfastIdeasPage.jsx b/frontend/src/components/BreakfastIdeasPage.jsx
+new file mode 100644
+index 0000000..e44573c
+--- /dev/null
++++ b/frontend/src/components/BreakfastIdeasPage.jsx
+@@ -0,0 +1,96 @@
++import { useEffect, useState } from 'react';
++import {
++  Alert,
++  Box,
++  Button,
++  Card,
++  Checkbox,
++  Chip,
++  CircularProgress,
++  FormControlLabel,
++  Typography,
++} from '@mui/material';
++import ArrowBackIcon from '@mui/icons-material/ArrowBack';
++import { useNavigate } from 'react-router-dom';
++import { api } from '../services/api';
++
++// "Breakfast Ideas": one line per idea from config/breakfast-ideas.json.
++// The checkboxes only mark ideas while this page is open; they are not saved
++// yet, so nothing is lost or sent to the server when you tick them.
++export default function BreakfastIdeasPage() {
++  const navigate = useNavigate();
++  const [ideas, setIdeas] = useState([]);
++  const [weekdays, setWeekdays] = useState([]);
++  const [checked, setChecked] = useState(() => new Set());
++  const [loading, setLoading] = useState(true);
++  const [error, setError] = useState('');
++
++  useEffect(() => {
++    let isCurrentRequest = true;
++    api.get('/food/breakfast-ideas')
++      .then(({ data }) => {
++        if (!isCurrentRequest) return;
++        setIdeas(data.ideas || []);
++        setWeekdays(data.weekdays || []);
++      })
++      .catch((requestError) => {
++        if (isCurrentRequest) setError(requestError.message || 'Could not load the breakfast ideas.');
++      })
++      .finally(() => {
++        if (isCurrentRequest) setLoading(false);
++      });
++    return () => {
++      isCurrentRequest = false;
++    };
++  }, []);
++
++  const toggle = (id) => setChecked((current) => {
++    const next = new Set(current);
++    if (next.has(id)) next.delete(id);
++    else next.add(id);
++    return next;
++  });
++
++  return (
++    <Box sx={{ maxWidth: 720, mx: 'auto', display: 'grid', gap: 2 }}>
++      <Button
++        startIcon={<ArrowBackIcon />}
++        onClick={() => navigate('/settings')}
++        sx={{ justifySelf: 'start', textTransform: 'none' }}
++      >
++        Menu
++      </Button>
++      <Box>
++        <Typography variant="h4">Breakfast Ideas</Typography>
++        <Typography color="text.secondary">
++          {weekdays.length ? `${weekdays[0]} to ${weekdays[weekdays.length - 1]} mornings` : 'Weekday mornings'}
++          , no added sugar. Fruit is fine.
++        </Typography>
++      </Box>
++      {error && <Alert severity="error">{error}</Alert>}
++      {loading && <CircularProgress size={24} />}
++      {!loading && !error && ideas.length === 0 && (
++        <Alert severity="info">No breakfast ideas yet. Add some to backend/config/breakfast-ideas.json.</Alert>
++      )}
++      {ideas.length > 0 && (
++        <Card sx={{ py: 0.5 }}>
++          {ideas.map((idea) => (
++            <Box
++              key={idea.id}
++              sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, minWidth: 0 }}
++            >
++              <FormControlLabel
++                sx={{ flex: 1, minWidth: 0, my: 0.25, alignItems: 'flex-start', '& .MuiCheckbox-root': { pt: 1 } }}
++                control={<Checkbox checked={checked.has(idea.id)} onChange={() => toggle(idea.id)} />}
++                label={<Typography sx={{ pt: 1, overflowWrap: 'anywhere' }}>{idea.name}</Typography>}
++              />
++              {idea.overnightPrep && (
++                <Chip size="small" variant="outlined" label="Prep the night before" />
++              )}
++            </Box>
++          ))}
++        </Card>
++      )}
++    </Box>
++  );
++}
+diff --git a/frontend/src/components/PlannerSettingsPage.jsx b/frontend/src/components/PlannerSettingsPage.jsx
+index 540b8d9..74ae973 100644
+--- a/frontend/src/components/PlannerSettingsPage.jsx
++++ b/frontend/src/components/PlannerSettingsPage.jsx
+@@ -18,6 +18,7 @@ import {
+ } from '@mui/material';
+ import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
+ import ChevronRightIcon from '@mui/icons-material/ChevronRight';
++import FreeBreakfastOutlinedIcon from '@mui/icons-material/FreeBreakfastOutlined';
+ import Inventory2OutlinedIcon from '@mui/icons-material/Inventory2Outlined';
+ import LogoutIcon from '@mui/icons-material/Logout';
+ import { useNavigate } from 'react-router-dom';
+@@ -72,6 +73,11 @@ export default function PlannerSettingsPage({ onGeneratePlan }) {
+             <ListItemText primary="Show Current Inventory" secondary="Purchased vegetables and their freshness" />
+             <ChevronRightIcon />
+           </ListItemButton>
++          <ListItemButton onClick={() => navigate('/breakfast')}>
++            <ListItemIcon><FreeBreakfastOutlinedIcon /></ListItemIcon>
++            <ListItemText primary="Breakfast Ideas" secondary="Weekday mornings, no added sugar" />
++            <ChevronRightIcon />
++          </ListItemButton>
+         </List>
+       </Card>
+       <Card>
+diff --git a/frontend/src/components/RecipePlannerPage.jsx b/frontend/src/components/RecipePlannerPage.jsx
+index 8f48155..79a8d76 100644
+--- a/frontend/src/components/RecipePlannerPage.jsx
++++ b/frontend/src/components/RecipePlannerPage.jsx
+@@ -24,6 +24,7 @@ import {
+   useTheme,
+ } from '@mui/material';
+ import CloseIcon from '@mui/icons-material/Close';
++import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
+ import ReceiptLongOutlinedIcon from '@mui/icons-material/ReceiptLongOutlined';
+ import RestaurantMenuOutlinedIcon from '@mui/icons-material/RestaurantMenuOutlined';
+ import { useLocation } from 'react-router-dom';
+@@ -33,17 +34,23 @@ import BottomNav, { BOTTOM_NAV_HEIGHT } from '../scenes/global/BottomNav';
+ import PlannerSettingsPage from './PlannerSettingsPage';
+ import PlannerTopbar from './PlannerTopbar';
+ import InventoryPage from './InventoryPage';
++import BreakfastIdeasPage from './BreakfastIdeasPage';
+ import CatchUpDialog from './CatchUpDialog';
+ import AttentionCard from './AttentionCard';
+ 
+ const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+ const MEALS = ['Kids Tiffin', 'Lunch', 'Dinner'];
++// Shown on a day card only when something is planned; never confirmed.
++const OPTIONAL_MEALS = { before: ['Breakfast'], after: ['Sides', 'Guest Special'] };
++const UNCONFIRMED_MEALS = ['Breakfast', 'Sides', 'Guest Special'];
++const CHECKLIST_SX = { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', columnGap: 1 };
+ const MEAL_SLOTS = [
++  { label: 'Breakfast', value: 'breakfast' },
+   { label: 'Kids Tiffin', value: 'kids_tiffin' },
+   { label: 'Adult Tiffin', value: 'adult_tiffin' },
+   { label: 'Lunch', value: 'weekend_lunch' },
+   { label: 'Dinner', value: 'dinner' },
+-  { label: 'Sides', value: 'sides' }, 
++  { label: 'Sides', value: 'sides' },
+   { label: 'Guest Special', value: 'guest_special' },
+ ];
+ 
+@@ -85,7 +92,13 @@ function statusColor(status) {
+ }
+ 
+ function DayCard({ day, meals, dalSuggestion, pairedVegetable, colors, onConfirm, onPlanDal }) {
+-  const mealLabels = meals['Adult Tiffin'] ? [...MEALS.slice(0, 1), 'Adult Tiffin', ...MEALS.slice(1)] : MEALS;
++  const mainMeals = meals['Adult Tiffin'] ? [...MEALS.slice(0, 1), 'Adult Tiffin', ...MEALS.slice(1)] : MEALS;
++  const planned = (label) => (meals[label]?.length ?? 0) > 0;
++  const mealLabels = [
++    ...OPTIONAL_MEALS.before.filter(planned),
++    ...mainMeals,
++    ...OPTIONAL_MEALS.after.filter(planned),
++  ];
+   return (
+     <Card
+       elevation={0}
+@@ -118,7 +131,7 @@ function DayCard({ day, meals, dalSuggestion, pairedVegetable, colors, onConfirm
+                   <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>
+                     {entry.name}
+                   </Typography>
+-                  {entry.status !== 'planned' ? (
++                  {UNCONFIRMED_MEALS.includes(meal) ? null : entry.status !== 'planned' ? (
+                     <Chip
+                       size="small"
+                       color={statusColor(entry.status)}
+@@ -185,7 +198,8 @@ export default function RecipePlannerPage() {
+   const location = useLocation();
+   const theme = useTheme();
+   const colors = tokens(theme.palette.mode);
+-  const view = location.pathname === '/settings' ? 'settings' : location.pathname === '/inventory' ? 'inventory' : 'home';
++  const VIEW_BY_PATH = { '/settings': 'settings', '/inventory': 'inventory', '/breakfast': 'breakfast' };
++  const view = VIEW_BY_PATH[location.pathname] || 'home';
+   const weekStart = useMemo(() => getMonday(new Date()), []);
+   const [dashboard, setDashboard] = useState(null);
+   const [loading, setLoading] = useState(true);
+@@ -268,12 +282,9 @@ export default function RecipePlannerPage() {
+     update?.catch(() => {});
+   }, [dashboard, attentionCount]);
+   const recommendations = dashboard?.recommendations || [];
+-  const selectedRecipes = recommendations.filter((recipe) => {
+-    if (recipeMeal === 'kids_tiffin') return recipe.suitableForKidsTiffin;
+-    if (recipeMeal === 'adult_tiffin') return recipe.suitableForAdultTiffin;
+-    if (recipeMeal === 'dinner') return recipe.suitableForAdultDinner;
+-    return true;
+-  });
++  // The server decides which recipes fit each slot (inventory-driven mains,
++  // pantry mains, breakfast ideas, kids sides).
++  const selectedRecipes = dashboard?.slotRecipes?.[recipeMeal] || [];
+ 
+   const openRecipeDialog = (suggestedRecipeId = '') => {
+     setRecipeId(suggestedRecipeId ? String(suggestedRecipeId) : '');
+@@ -336,6 +347,23 @@ export default function RecipePlannerPage() {
+     }
+   };
+ 
++  const deleteStagedItem = async (item) => {
++    setSaving(true);
++    try {
++      await api.delete(`/food/groceries/stage/${item.id}`);
++      setSelectedStageIds((current) => current.filter((id) => id !== item.id));
++      const remaining = (dashboard?.groceryStage || []).filter((entry) => entry.id !== item.id);
++      if (remaining.length === 0) setPurchaseDialogOpen(false);
++      setNotice(`Removed ${item.item_name} from the grocery list.`);
++      await refreshDashboard();
++    } catch (error) {
++      setPageError(error.message || 'Could not remove this item.');
++      await refreshDashboard();
++    } finally {
++      setSaving(false);
++    }
++  };
++
+   const confirmMeal = async (planId, response) => {
+     setSaving(true);
+     try {
+@@ -468,6 +496,7 @@ export default function RecipePlannerPage() {
+         {loading && <CircularProgress size={24} sx={{ mb: 2 }} />}
+         {view === 'settings' && <PlannerSettingsPage onGeneratePlan={generatePlan} />}
+         {view === 'inventory' && <InventoryPage />}
++        {view === 'breakfast' && <BreakfastIdeasPage />}
+         {view === 'home' && (
+           <AttentionCard
+             unconfirmed={unconfirmedMeals}
+@@ -505,8 +534,10 @@ export default function RecipePlannerPage() {
+               label="Date"
+               value={recipeDate}
+               onChange={(event) => setRecipeDate(event.target.value)}
+-              InputLabelProps={{ shrink: true }}
+-              inputProps={{ min: weekStart, max: offsetDate(weekStart, 6) }}
++              slotProps={{
++                inputLabel: { shrink: true },
++                htmlInput: { min: weekStart, max: offsetDate(weekStart, 6) },
++              }}
+             />
+             <TextField
+               select
+@@ -550,22 +581,24 @@ export default function RecipePlannerPage() {
+         <Box component="form" onSubmit={stageGroceries}>
+           <DialogTitle>Add fresh vegetables to the grocery list</DialogTitle>
+           <DialogContent sx={{ display: 'grid', pt: '8px !important' }}>
+-            {(dashboard?.items || []).map((item) => (
+-              <FormControlLabel
+-                key={item.id}
+-                control={(
+-                  <Checkbox
+-                    checked={selectedItemIds.includes(item.id)}
+-                    onChange={(event) => setSelectedItemIds((current) => (
+-                      event.target.checked
+-                        ? [...current, item.id]
+-                        : current.filter((id) => id !== item.id)
+-                    ))}
+-                  />
+-                )}
+-                label={item.name}
+-              />
+-            ))}
++            <Box sx={CHECKLIST_SX}>
++              {(dashboard?.items || []).map((item) => (
++                <FormControlLabel
++                  key={item.id}
++                  control={(
++                    <Checkbox
++                      checked={selectedItemIds.includes(item.id)}
++                      onChange={(event) => setSelectedItemIds((current) => (
++                        event.target.checked
++                          ? [...current, item.id]
++                          : current.filter((id) => id !== item.id)
++                      ))}
++                    />
++                  )}
++                  label={item.name}
++                />
++              ))}
++            </Box>
+             <Typography variant="caption" color="text.secondary">
+               Only tracked fresh vegetables are listed; pantry staples stay out of inventory.
+             </Typography>
+@@ -583,37 +616,49 @@ export default function RecipePlannerPage() {
+         <Box component="form" onSubmit={confirmPurchases}>
+           <DialogTitle>Confirm purchased vegetables</DialogTitle>
+           <DialogContent sx={{ display: 'grid', gap: 1, pt: '8px !important' }}>
+-            {dashboard?.groceryStage.map((item) => (
+-              <FormControlLabel
+-                key={item.id}
+-                control={(
+-                  <Checkbox
+-                    checked={selectedStageIds.includes(item.id)}
+-                    onChange={(event) => setSelectedStageIds((current) => (
+-                      event.target.checked
+-                        ? [...current, item.id]
+-                        : current.filter((id) => id !== item.id)
+-                    ))}
++            <Box sx={CHECKLIST_SX}>
++              {dashboard?.groceryStage.map((item) => (
++                <Box key={item.id} sx={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
++                  <FormControlLabel
++                    sx={{ flex: 1, minWidth: 0, mr: 0 }}
++                    control={(
++                      <Checkbox
++                        checked={selectedStageIds.includes(item.id)}
++                        onChange={(event) => setSelectedStageIds((current) => (
++                          event.target.checked
++                            ? [...current, item.id]
++                            : current.filter((id) => id !== item.id)
++                        ))}
++                      />
++                    )}
++                    label={item.item_name}
+                   />
+-                )}
+-                label={item.item_name}
+-              />
+-            ))}
++                  <IconButton
++                    size="small"
++                    aria-label={`Remove ${item.item_name} from the grocery list`}
++                    onClick={() => deleteStagedItem(item)}
++                    disabled={saving}
++                  >
++                    <DeleteOutlinedIcon fontSize="small" />
++                  </IconButton>
++                </Box>
++              ))}
++            </Box>
+             <TextField
+               type="date"
+               label="Purchase date"
+               value={purchaseDate}
+               onChange={(event) => setPurchaseDate(event.target.value)}
+-              InputLabelProps={{ shrink: true }}
++              slotProps={{ inputLabel: { shrink: true } }}
+             />
+             <TextField
+               label="Store (optional)"
+               value={store}
+               onChange={(event) => setStore(event.target.value)}
+-              inputProps={{ maxLength: 120 }}
++              slotProps={{ htmlInput: { maxLength: 120 } }}
+             />
+             <Typography variant="caption" color="text.secondary">
+-              Each confirmed vegetable becomes a separate available purchase lot.
++              Each confirmed vegetable becomes a separate available purchase lot. Use the bin to remove an item you no longer need.
+             </Typography>
+           </DialogContent>
+           <DialogActions sx={{ px: 3, pb: 2 }}>
+diff --git a/frontend/src/scenes/global/BottomNav.jsx b/frontend/src/scenes/global/BottomNav.jsx
+index 388facc..e18d842 100644
+--- a/frontend/src/scenes/global/BottomNav.jsx
++++ b/frontend/src/scenes/global/BottomNav.jsx
+@@ -10,7 +10,7 @@ import { tokens } from '../../theme';
+ export const BOTTOM_NAV_HEIGHT = 56;
+ 
+ // Pages that live under the hamburger Menu keep "Menu" highlighted.
+-const MENU_PATHS = ['/settings', '/inventory'];
++const MENU_PATHS = ['/settings', '/inventory', '/breakfast'];
+ 
+ /**
+  * Bottom bar: Home | Add | Groceries | Confirm | Menu.
+diff --git a/frontend/src/theme.js b/frontend/src/theme.js
+index ac3cc8c..d6ca497 100755
+--- a/frontend/src/theme.js
++++ b/frontend/src/theme.js
+@@ -121,6 +121,52 @@ export const tokens = (mode) => ({
+       }),
+ });
+ 
++// Form styling (GitHub issue #3). MUI's defaults use the primary colour, which
++// is near-black / navy here, so checkboxes, focused inputs and primary buttons
++// vanished into the dialog. Use the green accent instead and round the corners.
++const formComponents = (mode, colors) => {
++  const accent = mode === "dark" ? colors.greenAccent[500] : colors.greenAccent[400];
++  return {
++    MuiDialog: {
++      styleOverrides: {
++        paper: {
++          borderRadius: 20,
++          backgroundImage: "none",
++          backgroundColor: mode === "dark" ? colors.primary[400] : "#ffffff",
++        },
++      },
++    },
++    MuiOutlinedInput: {
++      styleOverrides: {
++        root: {
++          borderRadius: 12,
++          "&.Mui-focused .MuiOutlinedInput-notchedOutline": { borderColor: accent, borderWidth: 2 },
++        },
++      },
++    },
++    MuiInputLabel: {
++      styleOverrides: { root: { "&.Mui-focused": { color: accent } } },
++    },
++    MuiCheckbox: { defaultProps: { color: "secondary" } },
++    MuiRadio: { defaultProps: { color: "secondary" } },
++    MuiButton: {
++      styleOverrides: {
++        root: { borderRadius: 12 },
++        ...(mode === "dark"
++          ? {
++              containedPrimary: {
++                backgroundColor: colors.greenAccent[600],
++                color: colors.primary[600],
++                "&:hover": { backgroundColor: colors.greenAccent[500] },
++                "&.Mui-disabled": { backgroundColor: colors.primary[300], color: colors.primary[500] },
++              },
++            }
++          : {}),
++      },
++    },
++  };
++};
++
+ // mui theme settings
+ export const themeSettings = (mode) => {
+   const colors = tokens(mode);
+@@ -163,6 +209,9 @@ export const themeSettings = (mode) => {
+             },
+           }),
+     },
++    // Rounder corners everywhere; forms follow the same accent as the app.
++    shape: { borderRadius: 12 },
++    components: formComponents(mode, colors),
+     typography: {
+       fontFamily: ["Inter", "sans-serif"].join(","),
+       //fontFamily: ["Pinsetter", "cursive", "sans-serif"].join(","),
+diff --git a/frontend/src/theme.jsx b/frontend/src/theme.jsx
+deleted file mode 100755
+index 8a1f3a5..0000000
+--- a/frontend/src/theme.jsx
++++ /dev/null
+@@ -1,220 +0,0 @@
+-import { createContext, useState, useMemo } from "react";
+-import { createTheme } from "@mui/material/styles";
+-
+-// color design tokens export
+-export const tokens = (mode) => ({
+-  ...(mode === "dark"
+-    ? {
+-        grey: {
+-          100: "#e0e0e0",
+-          200: "#c2c2c2",
+-          300: "#a3a3a3",
+-          400: "#858585",
+-          500: "#666666",
+-          600: "#525252",
+-          700: "#3d3d3d",
+-          800: "#292929",
+-          900: "#141414",
+-        },
+-        primary: {
+-          100: "#d0d1d5",
+-          200: "#a1a4ab",
+-          300: "#727681",
+-          400: "#1F2A40",
+-          500: "#141b2d",
+-          600: "#101624",
+-          700: "#0c101b",
+-          800: "#080b12",
+-          900: "#040509",
+-        },
+-        greenAccent: {
+-          100: "#dbf5ee",
+-          200: "#b7ebde",
+-          300: "#94e2cd",
+-          400: "#70d8bd",
+-          500: "#4cceac",
+-          600: "#3da58a",
+-          700: "#2e7c67",
+-          800: "#1e5245",
+-          900: "#0f2922",
+-        },
+-        redAccent: {
+-          100: "#f8dcdb",
+-          200: "#f1b9b7",
+-          300: "#e99592",
+-          400: "#e2726e",
+-          500: "#db4f4a",
+-          600: "#af3f3b",
+-          700: "#832f2c",
+-          800: "#58201e",
+-          900: "#2c100f",
+-        },
+-        blueAccent: {
+-          100: "#e1e2fe",
+-          200: "#c3c6fd",
+-          300: "#a4a9fc",
+-          400: "#868dfb",
+-          500: "#6870fa",
+-          600: "#535ac8",
+-          700: "#3e4396",
+-          800: "#2a2d64",
+-          900: "#151632",
+-        },
+-      }
+-    : {
+-        grey: {
+-          100: "#141414",
+-          200: "#292929",
+-          300: "#3d3d3d",
+-          400: "#525252",
+-          500: "#666666",
+-          600: "#858585",
+-          700: "#a3a3a3",
+-          800: "#c2c2c2",
+-          900: "#e0e0e0",
+-        },
+-        primary: {
+-          100: "#040509",
+-          200: "#080b12",
+-          300: "#0c101b",
+-          400: "#f2f0f0", // manually changed
+-          500: "#141b2d",
+-          600: "#1F2A40",
+-          700: "#727681",
+-          800: "#a1a4ab",
+-          900: "#d0d1d5",
+-        },
+-        greenAccent: {
+-          100: "#0f2922",
+-          200: "#1e5245",
+-          300: "#2e7c67",
+-          400: "#3da58a",
+-          500: "#4cceac",
+-          600: "#70d8bd",
+-          700: "#94e2cd",
+-          800: "#b7ebde",
+-          900: "#dbf5ee",
+-        },
+-        redAccent: {
+-          100: "#2c100f",
+-          200: "#58201e",
+-          300: "#832f2c",
+-          400: "#af3f3b",
+-          500: "#db4f4a",
+-          600: "#e2726e",
+-          700: "#e99592",
+-          800: "#f1b9b7",
+-          900: "#f8dcdb",
+-        },
+-        blueAccent: {
+-          100: "#151632",
+-          200: "#2a2d64",
+-          300: "#3e4396",
+-          400: "#535ac8",
+-          500: "#6870fa",
+-          600: "#868dfb",
+-          700: "#a4a9fc",
+-          800: "#c3c6fd",
+-          900: "#e1e2fe",
+-        },
+-      }),
+-});
+-
+-// mui theme settings
+-export const themeSettings = (mode) => {
+-  const colors = tokens(mode);
+-  return {
+-    palette: {
+-      mode: mode,
+-      ...(mode === "dark"
+-        ? {
+-            // palette values for dark mode
+-            primary: {
+-              main: colors.primary[500],
+-            },
+-            secondary: {
+-              main: colors.greenAccent[500],
+-            },
+-            neutral: {
+-              dark: colors.grey[700],
+-              main: colors.grey[500],
+-              light: colors.grey[100],
+-            },
+-            background: {
+-              default: colors.primary[500],
+-            },
+-          }
+-        : {
+-            // palette values for light mode
+-            primary: {
+-              main: colors.primary[100],
+-            },
+-            secondary: {
+-              main: colors.greenAccent[500],
+-            },
+-            neutral: {
+-              dark: colors.grey[700],
+-              main: colors.grey[500],
+-              light: colors.grey[100],
+-            },
+-            background: {
+-              default: "#fcfcfc",
+-            },
+-          }),
+-    },
+-    typography: {
+-      fontFamily: ["Source Sans Pro", "sans-serif"].join(","),
+-      fontSize: 12,
+-      h1: {
+-        fontFamily: ["Source Sans Pro", "sans-serif"].join(","),
+-        fontSize: 40,
+-      },
+-      h2: {
+-        fontFamily: ["Source Sans Pro", "sans-serif"].join(","),
+-        fontSize: 32,
+-      },
+-      h3: {
+-        fontFamily: ["Source Sans Pro", "sans-serif"].join(","),
+-        fontSize: 24,
+-      },
+-      h4: {
+-        fontFamily: ["Source Sans Pro", "sans-serif"].join(","),
+-        fontSize: 20,
+-      },
+-      h5: {
+-        fontFamily: ["Source Sans Pro", "sans-serif"].join(","),
+-        fontSize: 16,
+-      },
+-      h6: {
+-        fontFamily: ["Source Sans Pro", "sans-serif"].join(","),
+-        fontSize: 14,
+-      },
+-    },
+-  };
+-};
+-
+-// context for color mode
+-export const ColorModeContext = createContext({
+-  toggleColorMode: () => {},
+-});
+-
+-export const useMode = () => {
+-  const [mode, setMode] = useState(
+-    () => localStorage.getItem("colorMode") || "dark"
+-  );
+-
+-  const colorMode = useMemo(
+-    () => ({
+-      toggleColorMode: () =>
+-        setMode((prev) => {
+-          const next = prev === "light" ? "dark" : "light";
+-          localStorage.setItem("colorMode", next);
+-          return next;
+-        }),
+-    }),
+-    []
+-  );
+-
+-  const theme = useMemo(() => createTheme(themeSettings(mode)), [mode]);
+-  return [theme, colorMode];
+-};
+\ No newline at end of file

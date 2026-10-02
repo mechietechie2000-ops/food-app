@@ -3,6 +3,16 @@ const { rules } = require('../services/rules');
 const { isDate, dateOffset, isMonday, localDateString } = require('../services/dates');
 const { generateWeek } = require('../services/mealPlanner');
 const {
+  SLOT,
+  MEAL_SLOTS: MEAL_SLOT_NAMES,
+  UNCONFIRMED_SLOTS,
+  MEAL_TYPE,
+  NON_MAIN_MEAL_TYPES,
+  SIDES_SLOT_MEAL_TYPES,
+  sqlList,
+} = require('../services/slots');
+const { loadBreakfastIdeas } = require('../services/jsonRecipes');
+const {
   RESPONSE,
   applyMealResponse,
   getUnconfirmedMeals,
@@ -14,8 +24,8 @@ const WEEK_DAYS = 7;
 const DAY_MILLISECONDS = 86400000;
 const DAL_INTERVAL_DAYS = 2;
 const FRESHNESS_SOON_DAYS = 2;
-const MEAL_SLOTS = new Set(['kids_tiffin', 'adult_tiffin', 'dinner', 'weekend_lunch']);
-const AUTO_COOK_MEAL_SLOTS = ['kids_tiffin', 'dinner', 'weekend_lunch'];
+const MEAL_SLOTS = new Set(MEAL_SLOT_NAMES);
+const AUTO_COOK_MEAL_SLOTS = [SLOT.KIDS_TIFFIN, SLOT.DINNER, SLOT.WEEKEND_LUNCH];
 const INVENTORY_STATUS_FILTERS = new Set(['AVAILABLE', 'USED', 'DISCARDED', 'ALL']);
 const INVENTORY_ROW_LIMIT = 500;
 
@@ -162,7 +172,66 @@ function createFoodRouter(database) {
       || first.name.localeCompare(second.name));
   }
 
+  // Main dishes that need no fresh vegetable: every REQUIRED ingredient is
+  // always available (chicken, paneer, pantry dals ...). They never enter the
+  // automatic planner, but they can be planned by hand.
+  function getPantryRecipes() {
+    return database.prepare(`
+      SELECT r.id, r.name, r.meal_type, r.suitable_for_kids_tiffin,
+             r.suitable_for_adult_tiffin, r.suitable_for_adult_dinner
+      FROM recipe r
+      WHERE r.approved = 1
+        AND COALESCE(r.meal_type, '') NOT IN (${sqlList(NON_MAIN_MEAL_TYPES)})
+        AND EXISTS (
+          SELECT 1 FROM recipe_item ri WHERE ri.recipe_id = r.id AND ri.role = 'REQUIRED'
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM recipe_item ri JOIN item i ON i.id = ri.item_id
+          WHERE ri.recipe_id = r.id AND ri.role = 'REQUIRED'
+            AND (i.inventory_type = 'FRESH' OR i.always_available = 0)
+        )
+      ORDER BY r.name
+    `).all(...NON_MAIN_MEAL_TYPES).map((row) => ({
+      id: row.id,
+      name: row.name,
+      mealType: row.meal_type,
+      suitableForKidsTiffin: Boolean(row.suitable_for_kids_tiffin),
+      suitableForAdultTiffin: Boolean(row.suitable_for_adult_tiffin),
+      suitableForAdultDinner: Boolean(row.suitable_for_adult_dinner),
+    }));
+  }
+
+  function recipesByMealType(mealTypes) {
+    return database.prepare(`
+      SELECT id, name, meal_type FROM recipe
+      WHERE approved = 1 AND meal_type IN (${sqlList(mealTypes)})
+      ORDER BY name
+    `).all(...mealTypes).map((row) => ({ id: row.id, name: row.name, mealType: row.meal_type }));
+  }
+
+  // Every recipe that may be planned into `slot` by hand, one list per slot.
+  // Inventory-driven recipes come from the recommendations; pantry mains,
+  // breakfast ideas and kids sides do not depend on inventory.
+  function recipesForSlot(slot, recommendations, pantryRecipes) {
+    if (slot === SLOT.BREAKFAST) return recipesByMealType([MEAL_TYPE.BREAKFAST]);
+    if (slot === SLOT.SIDES) return recipesByMealType(SIDES_SLOT_MEAL_TYPES);
+    const allowed = (recipe) => {
+      if (slot === SLOT.KIDS_TIFFIN) return recipe.suitableForKidsTiffin;
+      if (slot === SLOT.ADULT_TIFFIN) return recipe.suitableForAdultTiffin;
+      if (slot === SLOT.DINNER) return recipe.suitableForAdultDinner;
+      return true; // lunch and guest special have no suitability flag
+    };
+    const byId = new Map();
+    [...recommendations, ...pantryRecipes].filter(allowed).forEach((recipe) => {
+      if (!byId.has(recipe.id)) byId.set(recipe.id, { id: recipe.id, name: recipe.name, mealType: recipe.mealType });
+    });
+    return [...byId.values()].sort((first, second) => first.name.localeCompare(second.name));
+  }
+
   function getDashboard(weekStart, today) {
+    const recommendations = getRecommendations();
+    const pantryRecipes = getPantryRecipes();
     const weekEnd = dateOffset(weekStart, WEEK_DAYS - 1);
     return {
       weekStart,
@@ -196,7 +265,11 @@ function createFoodRouter(database) {
         WHERE approved = 1
         ORDER BY name
       `).all(),
-      recommendations: getRecommendations(),
+      recommendations,
+      slotRecipes: Object.fromEntries(MEAL_SLOT_NAMES.map((slot) => [
+        slot,
+        recipesForSlot(slot, recommendations, pantryRecipes),
+      ])),
       dalSuggestions: getDalSuggestions(database, weekStart),
       plan: database.prepare(`
         SELECT p.id, p.recipe_id, r.name AS recipe_name, r.description, r.meal_type,
@@ -214,19 +287,16 @@ function createFoodRouter(database) {
 
   function eligibleRecipe(recipeId, mealSlot) {
     const recipe = database.prepare(`
-      SELECT id, meal_type, suitable_for_kids_tiffin, suitable_for_adult_tiffin,
-             suitable_for_adult_dinner
+      SELECT id, meal_type, suitable_for_adult_dinner
       FROM recipe
       WHERE id = ? AND approved = 1
     `).get(recipeId);
     if (!recipe) return false;
-    if (recipe.meal_type === 'dal_side') {
-      return mealSlot === 'dinner' && Boolean(recipe.suitable_for_adult_dinner);
+    if (recipe.meal_type === MEAL_TYPE.DAL_SIDE) {
+      return mealSlot === SLOT.DINNER && Boolean(recipe.suitable_for_adult_dinner);
     }
-    if (mealSlot === 'kids_tiffin' && !recipe.suitable_for_kids_tiffin) return false;
-    if (mealSlot === 'adult_tiffin' && !recipe.suitable_for_adult_tiffin) return false;
-    if (mealSlot === 'dinner' && !recipe.suitable_for_adult_dinner) return false;
-    return getRecommendations().some((recommendation) => recommendation.id === recipeId);
+    return recipesForSlot(mealSlot, getRecommendations(), getPantryRecipes())
+      .some((candidate) => candidate.id === recipeId);
   }
 
   router.get('/', (req, res) => {
@@ -261,6 +331,22 @@ function createFoodRouter(database) {
     });
     addItems(itemIds);
     return res.status(201).json({ staged: itemIds.length });
+  });
+
+  // Removes one item from the pending grocery list (bought elsewhere, added by
+  // mistake, no longer needed). Confirmed purchases cannot be deleted here.
+  router.delete('/groceries/stage/:id', (req, res) => {
+    const stageId = Number(req.params.id);
+    if (!Number.isSafeInteger(stageId) || stageId < 1) {
+      return res.status(400).json({ error: 'A valid grocery list item is required.' });
+    }
+    const result = database.prepare(
+      'DELETE FROM grocery_stage WHERE id = ? AND is_purchased = 0',
+    ).run(stageId);
+    if (result.changes !== 1) {
+      return res.status(404).json({ error: 'That item is no longer on the pending grocery list.' });
+    }
+    return res.json({ deleted: 1 });
   });
 
   router.post('/groceries/confirm', (req, res) => {
@@ -343,6 +429,8 @@ function createFoodRouter(database) {
       if (!plan || plan.status !== 'planned') {
         return null;
       }
+      // Breakfast, sides and guest specials are never confirmed.
+      if (UNCONFIRMED_SLOTS.includes(plan.meal_slot)) return null;
       if (AUTO_COOK_MEAL_SLOTS.includes(plan.meal_slot) && response !== RESPONSE.NO) {
         return null;
       }
@@ -375,6 +463,9 @@ function createFoodRouter(database) {
     }
     return res.json(applyCatchUpResponses(database, responses));
   });
+
+  // Weekday breakfast ideas (config/breakfast-ideas.json), one line each.
+  router.get('/breakfast-ideas', (_req, res) => res.json(loadBreakfastIdeas()));
 
   // Rows of the inventory table with a freshness label for available lots.
   router.get('/inventory', (req, res) => {

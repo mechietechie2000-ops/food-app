@@ -1,10 +1,12 @@
 npm run app starts Node child processes for the API and frontend. Killing the npm process can leave those children running, so ps | grep npm won’t necessarily show them.
 
+
 Find the process serving port 5316:
+lsof -nP -iTCP:5316 -sTCP:LISTEN
 
 
 Check the listed PID before stopping it:
-
+ps -p <PID> -o pid,ppid,command
 
 Then stop that specific process:
 
